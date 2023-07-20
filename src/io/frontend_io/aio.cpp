@@ -207,6 +207,11 @@ AIO::_CreateVolumeIo(pos_io& posIo)
         case IO_TYPE::READ:
         {
             volumeIo->dir = UbioDir::Read;
+            /* special case for prefetch io to bypass cache lookup */
+            if (*(posIo.arrayName) == '7' && 
+                    *(posIo.arrayName + 1) == '7') { 
+                volumeIo->SetPrefetchIo(true);
+            }
             break;
         }
         case IO_TYPE::WRITE:
@@ -226,7 +231,7 @@ AIO::_CreateVolumeIo(pos_io& posIo)
     uint64_t sectorRba = ChangeByteToSector(posIo.offset);
     volumeIo->SetSectorRba(sectorRba);
     volumeIo->SetEventType(BackendEvent::BackendEvent_FrontendIO);
-
+    
     return volumeIo;
 }
 

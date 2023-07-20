@@ -45,6 +45,7 @@
 #include "src/dump/dump_module.hpp"
 #include "src/event_scheduler/callback.h"
 #include "src/include/pos_event_id.hpp"
+#include "src/read_cache/read_cache.h"
 
 namespace pos
 {
@@ -89,6 +90,48 @@ ReadSubmission::~ReadSubmission()
     }
 }
 
+bool ReadSubmission::_IsSingleBlockCached(void) {
+    auto read_cache = ReadCacheSingleton::Instance();
+    bool ret = 0;
+
+    if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache() &&
+            !volumeIo->IsPrefetchIo()) {
+        uintptr_t addr = 0;
+        BlkAddr blk_addr = blockAlignment->GetHeadBlock();
+        int array_id = volumeIo->GetArrayId();
+        uint32_t volume_id = volumeIo->GetVolumeId();
+        std::pair<BlkAddr, bool> blk_addr_p = std::make_pair(blk_addr, false);
+
+        ret = read_cache->Get(array_id, volume_id, blk_addr_p, addr);
+
+        //airlog("HIST_ReadCache", "read_blk_cnt", volume_id, 1);
+
+        if (ret) {
+            void *src = (void *) (addr + blockAlignment->GetHeadPosition());
+            void *dst = volumeIo->GetBuffer();
+            size_t size = volumeIo->GetSize();
+
+            memcpy(dst, src, size);
+            
+            if (blk_addr_p.second) {
+                uintptr_t addr2 = 0;
+                read_cache->Delete(array_id, volume_id, blk_addr, addr2);
+            } else {
+                read_cache->ClearInProgress(array_id, volume_id, blk_addr, 
+                        kMemcpyInProgress);
+            }
+
+            airlog("CNT_ReadCache", "hit_single", volume_id, 1);
+            volumeIo->GetCallback()->Execute(); /* trigger aio completion */
+            volumeIo = nullptr;
+        } else {
+            airlog("CNT_ReadCache", "miss_single", volume_id, 1);
+        }
+    }
+
+    return ret;
+}
+
 bool
 ReadSubmission::Execute(void)
 {
@@ -99,6 +142,9 @@ ReadSubmission::Execute(void)
     bool isInSingleBlock = (blockAlignment->GetBlockCount() == 1);
     if (isInSingleBlock)
     {
+        if (_IsSingleBlockCached())
+            return true;
+        
         _PrepareSingleBlock();
         _SendVolumeIo(volumeIo);
     }
@@ -156,6 +202,101 @@ ReadSubmission::_MergeBlock(uint32_t blockIndex)
     merger->Add(pba, vsa, lsidEntry, dataSize);
 }
 
+bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
+    auto read_cache = ReadCacheSingleton::Instance();
+    bool cached = false;
+
+    if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache() && 
+            !volumeIo->IsPrefetchIo()) {
+        VolumeIoSmartPtr spVolumeIo = merger->GetSplit(volumeIoIndex);
+        BlockAlignment blkAlignment(
+                ChangeSectorToByte(spVolumeIo->GetSectorRba()), 
+                spVolumeIo->GetSize());
+        BlkAddr blk_addr = blkAlignment.GetHeadBlock();
+        uint32_t blockCount = blkAlignment.GetBlockCount();
+        std::vector<std::pair<uintptr_t, bool>> addrs(blockCount);
+        std::vector<std::pair<BlkAddr, bool>> blk_addr_p_vec;
+        int array_id = volumeIo->GetArrayId();
+        uint32_t volume_id = volumeIo->GetVolumeId();
+
+        //airlog("HIST_ReadCache", "read_blk_cnt", spVolumeIo->GetVolumeId(), 
+        //        blockCount);
+
+        uint32_t num_found = read_cache->Scan(array_id, volume_id, blk_addr, 
+                blockCount, addrs, blk_addr_p_vec);
+        
+        assert(blockCount >= num_found);
+
+        /* TODO: split again when only some blocks are cached */
+        if (num_found == blockCount) {
+            uintptr_t buffer_addr = (uintptr_t) spVolumeIo->GetBuffer();
+
+            for (uint32_t i = 0; i < blockCount; i++) {
+                size_t size = blkAlignment.GetDataSize(i); 
+                void *src = (i == 0) ? 
+                    (void *) (addrs[i].first + blkAlignment.GetHeadPosition()) :
+                    (void *) (addrs[i].first);
+                void *dst = (void *) buffer_addr;
+
+                //printf("(%u, %d), src=%lu, dst=%lu, size=%lu, " 
+                //      "buffer_size=%lu, %u\n", 
+                //        blockCount, i, (uintptr_t) src, (uintptr_t) dst, size, 
+                //        spVolumeIo->GetSize(), blkAlignment.GetHeadPosition());
+                
+                memcpy(dst, src, size);
+                
+                buffer_addr += size;
+            }
+            
+            for (auto iter = blk_addr_p_vec.begin(); 
+                    iter != blk_addr_p_vec.end(); 
+                    iter++) {
+                BlkAddr blk_addr = iter->first;
+                bool is_inv = iter->second;
+                
+                if (is_inv) {
+                    uintptr_t addr = 0;
+                    read_cache->Delete(array_id, volume_id, blk_addr, addr);
+                } else {
+                    read_cache->ClearInProgress(array_id, volume_id, blk_addr, 
+                            kMemcpyInProgress);
+                }
+            }
+            
+            airlog("CNT_ReadCache", "hit_merged", volume_id, blockCount);
+            /* ReadCompletion will destroy spVolumeIo */
+            spVolumeIo->GetCallback()->Execute();
+
+            cached = true;
+        } else {
+            if (!num_found) {
+                airlog("CNT_ReadCache", "miss_merged_all", volume_id, 
+                        blockCount);
+            } else {
+                for (auto iter = blk_addr_p_vec.begin(); 
+                        iter != blk_addr_p_vec.end(); 
+                        iter++) {
+                    BlkAddr blk_addr = iter->first;
+                    bool is_inv = iter->second;
+                    
+                    if (is_inv) {
+                        uintptr_t addr = 0;
+                        read_cache->Delete(array_id, volume_id, blk_addr, addr);
+                    } else {
+                        read_cache->ClearInProgress(array_id, volume_id, 
+                                blk_addr, kMemcpyInProgress);
+                    }
+                }
+
+                airlog("CNT_ReadCache", "miss_merged_partial", volume_id, 
+                        num_found);
+            }
+        }
+    }
+
+    return cached;
+}
+
 void
 ReadSubmission::_ProcessMergedIo(void)
 {
@@ -166,6 +307,10 @@ ReadSubmission::_ProcessMergedIo(void)
     for (uint32_t volumeIoIndex = 0; volumeIoIndex < volumeIoCount;
          volumeIoIndex++)
     {
+        if (_IsMergedBlockCached(volumeIoIndex)) {
+            continue;
+        }
+        
         _ProcessVolumeIo(volumeIoIndex);
     }
 }

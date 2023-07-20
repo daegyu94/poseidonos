@@ -8,6 +8,7 @@ SUBDIRS = allocator \
         mapper \
         mapper_service \
         cpu_affinity \
+		read_cache \
         io/general_io \
         io/frontend_io \
         io/backend_io \

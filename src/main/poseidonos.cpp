@@ -79,6 +79,8 @@
 #include "src/resource_checker/smart_collector.h"
 #include "src/trace/trace_exporter.h"
 #include "src/trace/otlp_factory.h"
+#include "src/read_cache/read_cache.h"
+#include "src/read_cache/prefetch_worker.h"
 
 namespace pos
 {
@@ -168,7 +170,13 @@ Poseidonos::Terminate(void)
     SpdkSingleton::ResetInstance();
 
     IoTimeoutCheckerSingleton::ResetInstance();
-
+#if 1
+    if (ReadCacheSingleton::Instance()->IsEnabled()) {
+        PrefetchWorkerSingleton::Instance()->SetTerminate(true);
+        PrefetchWorkerSingleton::ResetInstance();
+    }
+    ReadCacheSingleton::ResetInstance();
+#endif
     air_deactivate();
     air_finalize();
     if (nullptr != telemetryAirDelegator)
@@ -325,6 +333,15 @@ Poseidonos::_SetupThreadModel(void)
     FlushCmdManagerSingleton::Instance();
 
     IoTimeoutCheckerSingleton::Instance()->Initialize();
+#if 1
+    int num_prefetcher = 1; // XXX: same with num of reactors?
+    ReadCacheSingleton::Instance()->Initialize(num_prefetcher);
+    if (ReadCacheSingleton::Instance()->IsEnabled()) {
+        std::string port = "50051";
+        std::string svrAddr = "0.0.0.0:" + port;
+        PrefetchWorkerSingleton::Instance()->Initialize(num_prefetcher, svrAddr);
+    }
+#endif
 }
 
 void

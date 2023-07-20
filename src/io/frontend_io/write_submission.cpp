@@ -61,6 +61,7 @@
 #include "src/logger/logger.h"
 #include "src/spdk_wrapper/event_framework_api.h"
 #include "src/state/state_manager.h"
+#include "src/read_cache/read_cache.h"
 
 /*To do Remove after adding array Idx by Array*/
 #include "src/array_mgmt/array_manager.h"
@@ -107,6 +108,78 @@ WriteSubmission::~WriteSubmission(void)
 {
 }
 
+void WriteSubmission::_InvalidateCache(BlkAddr blk_addr) {
+    auto read_cache = ReadCacheSingleton::Instance();
+    //BlkAddr alignedblkRba = extent_start(blk_addr);
+    
+    /* TODO: Delete only extent aligned blkrba */
+    for (uint32_t i = 0; i < blockCount; i++) {
+        uintptr_t tmp_addr = 0;
+
+        read_cache->Delete(volumeIo->GetArrayId(), volumeId, 
+                blk_addr + i, tmp_addr);
+    }
+}
+
+/* 
+ * FIXME: currently event if extent is fully utilized (100%), 
+ * memcpy and then evict, however memcpy is not needed
+ */
+void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
+    auto read_cache = ReadCacheSingleton::Instance();
+
+    if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache()) {
+        std::vector<std::pair<uintptr_t, bool>> addrs(blockCount, 
+                std::make_pair(0, false));
+        std::vector<std::pair<BlkAddr, bool>> blk_addr_p_vec;
+        int array_id = volumeIo->GetArrayId();
+        uint32_t volume_id = volumeIo->GetVolumeId();
+
+        uint32_t num_found = read_cache->Scan(array_id, volume_id, blk_addr, 
+                blockCount, addrs, blk_addr_p_vec);
+        
+        uintptr_t buffer_addr = (uintptr_t) volumeIo->GetBuffer();
+        for (uint32_t i = 0; i < blockCount; i++) {
+            size_t size = blockAlignment.GetDataSize(i); 
+            
+            /* bypass memcpy if extent will be invalidated */
+            if (addrs[i].first && !addrs[i].second) {
+                void *src = (void *) buffer_addr;
+                void *dst = (void *) (addrs[i].first + 
+                        blockAlignment.GetHeadPosition());
+                
+                memcpy(dst, src, size);
+
+                //printf("(%u, %d) buffer_addr=%lu, src=%lu, dst=%lu 
+                //      "(addr=%lu, headpos=%u), size=%lu\n", 
+                //        blockCount, i, buffer_addr, (uintptr_t) src, 
+                //        (uintptr_t) dst, addrs[i].first, 
+                //        blockAlignment.GetHeadPosition(), size);
+            }
+
+            buffer_addr += size; // next block
+        }
+        
+        for (auto iter = blk_addr_p_vec.begin(); 
+                iter != blk_addr_p_vec.end(); 
+                iter++) {
+            BlkAddr blk_addr = iter->first;
+            bool is_inv = iter->second;
+
+            if (is_inv) {
+                uintptr_t addr = 0;
+                read_cache->Delete(array_id, volume_id, blk_addr, addr);
+            } else {
+                read_cache->ClearInProgress(array_id, volume_id, blk_addr, 
+                        kMemcpyInProgress);
+            }
+        }
+
+        airlog("CNT_ReadCache", "succ_inv", volume_id, num_found);
+        //airlog("HIST_ReadCache", "write_blk_cnt", volume_id, blockCount);
+    }
+}
+
 bool
 WriteSubmission::Execute(void)
 {
@@ -133,6 +206,13 @@ WriteSubmission::Execute(void)
             }
             return false;
         }
+        
+        if (1) {
+            _UpdateCache(startRba);
+        } else {
+            _InvalidateCache(startRba);
+        }
+
         bool done = _ProcessOwnedWrite();
         if (unlikely(!done))
         {

@@ -92,6 +92,9 @@ public:
     virtual uint64_t GetSectorRba(void);
     void SetUserLsid(StripeId stripeId);
     virtual StripeId GetUserLsid(void);
+    
+    void SetPrefetchIo(bool opt) { prefetch_io = opt; }
+    bool IsPrefetchIo(void) { return prefetch_io; }
 
 private:
     static const StripeAddr INVALID_LSID_ENTRY;
@@ -106,6 +109,8 @@ private:
     uint64_t sectorRba;
     StripeId stripeId;
     IVolumeInfoManager* volumeManager;
+    
+    bool prefetch_io = false;
 
     bool _IsInvalidVolumeId(uint32_t inputVolumeId);
     virtual bool _IsInvalidLsidEntry(StripeAddr& inputLsidEntry);

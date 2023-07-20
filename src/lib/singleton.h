@@ -93,6 +93,54 @@ std::atomic<T*> Singleton<T>::instance;
 template<typename T>
 std::mutex Singleton<T>::instanceMutex;
 
+template<typename T>
+class SimpleSingleton
+{
+public:
+    template<typename... Args>
+    static T*
+    Instance(Args... args)
+    {
+        T* tmp = instance;
+        if (tmp == nullptr)
+        {
+            tmp = instance;
+            if (tmp == nullptr)
+            {
+                tmp = new T(std::forward<Args>(args)...);
+                instance = tmp;
+                atexit(ResetInstance);
+            }
+        }
+        return tmp;
+    }
+
+    static void
+    ResetInstance()
+    {
+        T* tmp = instance;
+        if (tmp != nullptr)
+        {
+            delete tmp;
+            tmp = nullptr;
+            instance = tmp;
+        }
+    }
+
+protected:
+    SimpleSingleton()
+    {
+    }
+    virtual ~SimpleSingleton()
+    {
+    }
+
+private:
+    static T* instance;
+};
+
+template<typename T>
+T* SimpleSingleton<T>::instance;
 } // namespace pos
 
 #endif // IBOFOS_SINGLETON_H_

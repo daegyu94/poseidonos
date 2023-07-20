@@ -1,0 +1,4 @@
+
+namespace pos {
+
+} // namespace pos

@@ -59,6 +59,8 @@ private:
     void _MergeBlock(uint32_t blocIndex);
     void _ProcessMergedIo(void);
     void _ProcessVolumeIo(uint32_t volumeIoIndex);
+    bool _IsSingleBlockCached(void);
+    bool _IsMergedBlockCached(uint32_t volumeIoIndex);
 
     ReadCompletionFactory readCompletionFactory;
     BlockAlignment* blockAlignment{nullptr};

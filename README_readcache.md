@@ -18,10 +18,10 @@
   ```
   
 ### Description of pos.config for read cache
-"enable": true: enable, false: disable
-"cache_size_mb": cache memory pool size in MB
-"cache_policy": FIFOPolicy: extent is evicted only in list head, FIFOFastEvictionPolicy: evict fully used extent while extent in the list
-"extent_size_kb": caching size unit, extent consists of several 4KB blocks, extent size <= 128KB (4KB aligned), extent size > 128KB (128 KB aligned)
+- "enable": true: enable, false: disable
+- "cache_size_mb": cache memory pool size in MB
+- "cache_policy": FIFOPolicy: extent is evicted only in list head, FIFOFastEvictionPolicy: evict fully used extent while extent in the list
+- "extent_size_kb": caching size unit, extent consists of several 4KB blocks, extent size <= 128KB (4KB aligned), extent size > 128KB (128 KB aligned)
 
 example of `pos.conf`
 ```sh

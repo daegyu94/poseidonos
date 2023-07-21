@@ -5,10 +5,13 @@
 - Please refer to `src/read_cache/grpc_prefetch_server.cpp` and `proto/prefetch.proto`
 
 ### Limitation
-- Prefetcher uses event reactor's core 3 (hardcoded), please set pos.config "event_reactor": "3"
+- Prefetcher, which consumes received prefetch message, is pinned at core 29 and it uses event reactor's core 3, please set pos.config "event_reactor": "3"
   - TODO: change hardcoded config
-- Prefetch metadata message consists of subsystem id, namespace id, and physical block address.
-  -  Thus, array name should be like "POSArray0" ("ArrayName" + "0"(starts from zero))
+
+- Prefetch metadata message consists of subsystem id, namespace id, and physical block address. (e.g., (1, 1, 4096))
+  - subsystem nqn should be like "nqn.2019-04.pos:subsystem1" ("subsystem name" + "1"(starts from 1))
+  - namespace id is the last single digit of "/dev/nvme0n1"
+  - physical block address is address of each volume (file's page offset should be translated by using fiemap() ioctl)
   ```cpp
     auto meta = std::make_shared<PrefetchMeta>(
          msg.subsys_id() - 1,

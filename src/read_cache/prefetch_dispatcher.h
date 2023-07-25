@@ -21,5 +21,6 @@ public:
 private:
     uint64_t request_cnt_;
     uint64_t reactor_cnt_;
+    std::vector<uint32_t> event_reactor_cpu_vec_;
 };
 } // namespace pos

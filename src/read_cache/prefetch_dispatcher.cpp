@@ -28,6 +28,17 @@ namespace pos {
 PrefetchDispatcher::PrefetchDispatcher(void) { 
     request_cnt_ = 0;
     reactor_cnt_ = AccelEngineApi::GetReactorCount();
+    
+    AffinityManager* affinity_manager = pos::AffinityManagerSingleton::Instance();
+    cpu_set_t event_reactor_cpu_set = 
+        affinity_manager->GetCpuSet(CoreType::EVENT_REACTOR);
+
+    for (uint32_t cpu = 0; cpu < affinity_manager->GetTotalCore(); cpu++) {
+        if (CPU_ISSET(cpu, &event_reactor_cpu_set)) {
+            //printf("event_reactor_core=%u\n", cpu);
+            event_reactor_cpu_vec_.push_back(cpu);
+        }    
+    }
 }
 
 PrefetchDispatcher::~PrefetchDispatcher(void) { }
@@ -111,7 +122,12 @@ void PrefetchDispatcher::IssueFrontendIO(PrefetchMeta *meta, uintptr_t addr,
     
     /* iterate all reactors, or XXX: for only event reactors? */ 
     //int core = AccelEngineApi::GetReactorByIndex(request_cnt_++ % reactor_cnt_);
-    int core = 3; /* FIXME: schedule to event reactors */ 
+    
+    /* 
+     * XXX: currently, event reactor is not used for foreground io in default
+     * only one event reactor is enough, use the first event reactor cpu
+     */
+    int core = event_reactor_cpu_vec_[0];
 
     auto eventFrameworkApi = EventFrameworkApiSingleton::Instance();
     eventFrameworkApi->SendSpdkEvent(core, 

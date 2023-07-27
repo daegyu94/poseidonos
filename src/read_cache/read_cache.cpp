@@ -57,8 +57,8 @@ void ReadCache::Initialize(int num_prefetcher) {
         .count = cache_size / info.size
     };
     
-    // int numaId = 0;
-    bufferPool_ = memoryManager_->CreateBufferPool(info); // (info, numaId);
+    //bufferPool_ = memoryManager_->CreateBufferPool(info);
+    bufferPool_ = memoryManager_->CreateBufferPool(info, 0);
     assert(bufferPool_ != nullptr);
     
     /* # of reactors - 1(event_reactor) + # of prefetche */

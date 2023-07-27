@@ -25,20 +25,24 @@
 #define PREFETCH_EID 6789
 
 namespace pos {
-PrefetchDispatcher::PrefetchDispatcher(void) { 
-    request_cnt_ = 0;
-    reactor_cnt_ = AccelEngineApi::GetReactorCount();
-    
+PrefetchDispatcher::PrefetchDispatcher(void) : request_cnt_(0) { 
     AffinityManager* affinity_manager = pos::AffinityManagerSingleton::Instance();
     cpu_set_t event_reactor_cpu_set = 
         affinity_manager->GetCpuSet(CoreType::EVENT_REACTOR);
+    cpu_set_t frontend_io_reactor_cpu_set = 
+        affinity_manager->GetCpuSet(CoreType::REACTOR);
 
     for (uint32_t cpu = 0; cpu < affinity_manager->GetTotalCore(); cpu++) {
         if (CPU_ISSET(cpu, &event_reactor_cpu_set)) {
             //printf("event_reactor_core=%u\n", cpu);
             event_reactor_cpu_vec_.push_back(cpu);
-        }    
+        } else if (CPU_ISSET(cpu, &frontend_io_reactor_cpu_set)) {
+            //printf("frontend_io_reactor_core=%u\n", cpu);
+            frontend_io_reactor_cpu_vec_.push_back(cpu);
+        }
     }
+    event_reactor_cnt_ = event_reactor_cpu_vec_.size();
+    frontend_io_reactor_cnt_ = frontend_io_reactor_cpu_vec_.size();
 }
 
 PrefetchDispatcher::~PrefetchDispatcher(void) { }
@@ -61,7 +65,7 @@ bool PrefetchDispatcher::Do(PrefetchMetaSmartPtr meta) {
     return FrontendIO(meta);
 }
 
-static void dummy_spdk_call(void* arg1, void* arg2) { }
+//static void dummy_spdk_call(void* arg1, void* arg2) { }
 
 static void frontend_io_complete(struct pos_io* posIo, int status) {
     PrefetchMeta *meta = (PrefetchMeta *) posIo->context;
@@ -75,7 +79,7 @@ static void frontend_io_complete(struct pos_io* posIo, int status) {
     
     UnlockRba(array_id, volume_id, rba, posIo->length / BLOCK_SIZE);
     
-    airlog("CNT_ReadCache", "succ_admit", 0, 1); 
+    airlog("CNT_ReadCache", "succ_admit", 0, extent_size); 
     
     pd_debug("array_id=%d, volume_id=%d, rba=%lu, addr=%lu, len=%lu\n", 
             array_id, volume_id, rba, (uintptr_t) posIo->iov->iov_base, 
@@ -88,13 +92,13 @@ static void frontend_io_complete(struct pos_io* posIo, int status) {
 
 static void frontend_io_submit(void *arg1, void *arg2) {
     struct pos_io *posIo = static_cast<struct pos_io *>(arg1);
-    uint64_t core = reinterpret_cast<uint64_t>(arg2);
+    //uint64_t core = reinterpret_cast<uint64_t>(arg2);
     
     UNVMfSubmitHandler(posIo);
-
-    auto eventFrameworkApi = EventFrameworkApiSingleton::Instance();
-    eventFrameworkApi->SendSpdkEvent(core, 
-            dummy_spdk_call, nullptr, nullptr);
+    
+    /* need? */
+    //auto eventFrameworkApi = EventFrameworkApiSingleton::Instance();
+    //eventFrameworkApi->SendSpdkEvent(core, dummy_spdk_call, nullptr, nullptr);
 }
 
 /* XXX: don't need for data path, use for detect prefetch io */
@@ -120,14 +124,8 @@ void PrefetchDispatcher::IssueFrontendIO(PrefetchMeta *meta, uintptr_t addr,
     posIo->array_id = array_id;
     posIo->complete_cb = frontend_io_complete;
     
-    /* iterate all reactors, or XXX: for only event reactors? */ 
-    //int core = AccelEngineApi::GetReactorByIndex(request_cnt_++ % reactor_cnt_);
-    
-    /* 
-     * XXX: currently, event reactor is not used for foreground io in default
-     * only one event reactor is enough, use the first event reactor cpu
-     */
-    int core = event_reactor_cpu_vec_[0];
+    int core = event_reactor_cpu_vec_[request_cnt_++ % event_reactor_cnt_];
+    //int core = frontend_io_reactor_cpu_vec_[request_cnt_++ % frontend_io_reactor_cnt_];
 
     auto eventFrameworkApi = EventFrameworkApiSingleton::Instance();
     eventFrameworkApi->SendSpdkEvent(core, 

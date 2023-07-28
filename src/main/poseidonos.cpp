@@ -334,8 +334,8 @@ Poseidonos::_SetupThreadModel(void)
 
     IoTimeoutCheckerSingleton::Instance()->Initialize();
 #if 1
-    int num_prefetcher = 1; // XXX: same with num of reactors?
-    ReadCacheSingleton::Instance()->Initialize(num_prefetcher);
+    int num_prefetcher = 1; /* consume received prefetch request */
+    ReadCacheSingleton::Instance()->Initialize();
     if (ReadCacheSingleton::Instance()->IsEnabled()) {
         std::string port = "50051";
         std::string svrAddr = "0.0.0.0:" + port;

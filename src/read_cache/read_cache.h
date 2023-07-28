@@ -33,7 +33,7 @@ public:
         }
     }
     
-    void Initialize(int);
+    void Initialize();
     
     void Put(int array_id, uint32_t volume_id, BlkAddr blk_addr, uintptr_t addr) {
         KeyType key(array_id, volume_id, blk_addr);

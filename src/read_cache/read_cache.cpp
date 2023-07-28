@@ -10,7 +10,7 @@ uint64_t extent_size = 0;
 uint64_t blocks_per_extent = 0;
 
 static std::string read_cache_str = "ReadCache";
-void ReadCache::Initialize(int num_prefetcher) {
+void ReadCache::Initialize() {
     ConfigManager& configManager = *ConfigManagerSingleton::Instance();
     std::string module("read_cache");
 
@@ -62,8 +62,8 @@ void ReadCache::Initialize(int num_prefetcher) {
     bufferPool_ = memoryManager_->CreateBufferPool(info, 0);
     assert(bufferPool_ != nullptr);
     
-    /* # of reactors - 1(event_reactor) + # of prefetche */
-    int num_shards = AccelEngineApi::GetReactorCount() - 1 + num_prefetcher;
+    /* cache op: frontend reactor (get/delete) + event reactor (put/evict) */
+    int num_shards = AccelEngineApi::GetReactorCount();
     size_t num_buffers = info.count;
     std::string policyStr;
     int policy = kFIFOFastEvictionPolicy;

@@ -9,6 +9,7 @@ namespace pos {
 uint64_t extent_size = 0;
 uint64_t blocks_per_extent = 0;
 
+static std::string read_cache_str = "ReadCache";
 void ReadCache::Initialize(int num_prefetcher) {
     ConfigManager& configManager = *ConfigManagerSingleton::Instance();
     std::string module("read_cache");
@@ -50,9 +51,9 @@ void ReadCache::Initialize(int num_prefetcher) {
     assert(extent_size > 0 || blocks_per_extent > 0);
 
     memoryManager_ = MemoryManagerSingleton::Instance();
-
+    
     BufferInfo info = {
-        .owner = typeid(this).name(),
+        .owner = read_cache_str,
         .size = extent_size,
         .count = cache_size / info.size
     };

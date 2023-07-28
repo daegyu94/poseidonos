@@ -172,6 +172,12 @@ BufferPool::_Init(void)
     // 2MB allocation for avoiding buddy allocation overhead
     uint64_t allocSize = hugepageAllocator->GetDefaultPageSize();
     uint32_t allocCount = 1;
+    
+    if (BUFFER_INFO.owner.compare("ReadCache") == 0) {
+        allocSize = (1 << 30); // XXX: 1024 MB unit, can be smaller unit
+        printf("ReadCache: allocSize(MB)=%lu\n", allocSize / (1 << 20));
+    }
+
     if (allocSize < BUFFER_INFO.size)
     {
         allocCount = BUFFER_INFO.size / allocSize + 1;

@@ -24,6 +24,14 @@
 
 #define PREFETCH_EID 6789
 
+//#define PREFETCH_BREAKDOWN
+#ifdef PREFETCH_BREAKDOWN
+#define prefetch_br_airlog(n, f, i, k) airlog(n, f, i, k)
+#else
+#define prefetch_br_airlog(n, f, i, k) do {} while (0)
+#endif
+
+
 namespace pos {
 PrefetchDispatcher::PrefetchDispatcher(void) : request_cnt_(0) { 
     AffinityManager* affinity_manager = pos::AffinityManagerSingleton::Instance();
@@ -74,12 +82,18 @@ static void frontend_io_complete(struct pos_io* posIo, int status) {
     uint64_t rba = meta->rba;
     uint64_t start_rba = rba % extent_size ? rba_start(rba) : rba;
     
+    prefetch_br_airlog("LAT_PrefetchIdxClear", "begin", volume_id, rba);
     ReadCacheSingleton::Instance()->ClearInProgress(array_id, 
             volume_id, ChangeByteToBlock(start_rba), kPrefetchInProgress);
+    prefetch_br_airlog("LAT_PrefetchIdxClear", "end", volume_id, rba);
     
+    prefetch_br_airlog("LAT_PrefetchUnLock", "begin", volume_id, rba);
     UnlockRba(array_id, volume_id, rba, posIo->length / BLOCK_SIZE);
+    prefetch_br_airlog("LAT_PrefetchUnLock", "end", volume_id, rba);
     
-    airlog("CNT_ReadCache", "succ_admit", 0, extent_size); 
+    airlog("LAT_PrefetchIO", "end", volume_id, rba);
+    
+    airlog("CNT_Prefetcher", "succ_admit", 0, 1); 
     
     pd_debug("array_id=%d, volume_id=%d, rba=%lu, addr=%lu, len=%lu\n", 
             array_id, volume_id, rba, (uintptr_t) posIo->iov->iov_base, 
@@ -92,13 +106,18 @@ static void frontend_io_complete(struct pos_io* posIo, int status) {
 
 static void frontend_io_submit(void *arg1, void *arg2) {
     struct pos_io *posIo = static_cast<struct pos_io *>(arg1);
-    //uint64_t core = reinterpret_cast<uint64_t>(arg2);
+#ifdef PREFETCH_BREAKDOWN
+    int volume_id = ((PrefetchMeta *) posIo->context)->volumeId;
+    uint64_t rba = posIo->offset;
+#endif
     
+    prefetch_br_airlog("LAT_PrefetchIssue", "end", volume_id, rba);
+    
+    prefetch_br_airlog("LAT_PrefetchAsyncIO", "begin", volume_id, rba);
     UNVMfSubmitHandler(posIo);
-    
-    /* need? */
-    //auto eventFrameworkApi = EventFrameworkApiSingleton::Instance();
-    //eventFrameworkApi->SendSpdkEvent(core, dummy_spdk_call, nullptr, nullptr);
+    prefetch_br_airlog("LAT_PrefetchAsyncIO", "end", volume_id, rba);
+
+    UNVMfCompleteHandler();
 }
 
 /* XXX: don't need for data path, use for detect prefetch io */
@@ -143,18 +162,26 @@ bool PrefetchDispatcher::FrontendIO(PrefetchMetaSmartPtr meta) {
     uintptr_t addr;
     int retry_cnt = 0;
     constexpr int max_retry_cnt = 3;
+   
+    read_cache->UpdateBufferUtil();
     
     /* already cached? */
     if (read_cache->Contain(array_id, volume_id, 
                 ChangeByteToBlock(rba))) {
+        airlog("CNT_Prefetcher", "failed_admit_contained", 0, 1);
         return true;
     }
-    
+     
+    airlog("LAT_PrefetchIO", "begin", volume_id, rba);
+
+    prefetch_br_airlog("LAT_PrefetchLock", "begin", volume_id, rba);
     if (!LockRba(array_id, volume_id, rba)) {
-        airlog("CNT_ReadCache", "failed_locked_admit", 0, 1);
+        airlog("CNT_Prefetcher", "failed_admit_locked", 0, 1);
         return false;
     }
+    prefetch_br_airlog("LAT_PrefetchLock", "end", volume_id, rba);
     
+   prefetch_br_airlog("LAT_PrefetchBuffer", "begin", volume_id, rba);
     while (retry_cnt++ < max_retry_cnt) {
         addr = read_cache->TryGetBuffer();
         if (addr) {
@@ -162,19 +189,24 @@ bool PrefetchDispatcher::FrontendIO(PrefetchMetaSmartPtr meta) {
         }
         read_cache->Evict();
     }
+    prefetch_br_airlog("LAT_PrefetchBuffer", "end", volume_id, rba);
+ 
     if (!addr) {
+        airlog("CNT_Prefetcher", "failed_admit_unalloc", 0, 1);
         UnlockRba(array_id, volume_id, rba, blocks_per_extent);
         return false; /* failed to allocate buffer */
     }
-    
+     
+    prefetch_br_airlog("LAT_PrefetchIdxPut", "begin", volume_id, rba);
     read_cache->Put(array_id, volume_id, ChangeByteToBlock(rba), addr);
-    
+    prefetch_br_airlog("LAT_PrefetchIdxPut", "end", volume_id, rba);
+     
     size_t remain_size = extent_size;
-    
     if (extent_size > max_prefetch_size) {
         size_t size = max_prefetch_size;
 
         while (1) {
+            prefetch_br_airlog("LAT_PrefetchIssue", "begin", volume_id, rba);
             PrefetchMeta *prefetch_meta = new PrefetchMeta(array_id, volume_id, 
                     rba);
             IssueFrontendIO(prefetch_meta, addr, size);
@@ -189,6 +221,7 @@ bool PrefetchDispatcher::FrontendIO(PrefetchMetaSmartPtr meta) {
                 remain_size;
         }
     } else {
+        prefetch_br_airlog("LAT_PrefetchIssue", "begin", volume_id, rba);
         // create new meta for pointer
         PrefetchMeta *prefetch_meta = new PrefetchMeta(array_id, volume_id, rba);
         IssueFrontendIO(prefetch_meta, addr, extent_size);

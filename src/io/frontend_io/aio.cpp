@@ -136,7 +136,7 @@ AioCompletion::_DoSpecificJob(void)
     }
 
     bool keepCurrentReactor = eventFrameworkApi->IsSameReactorNow(originCore);
-
+    
     if (likely(keepCurrentReactor))
     {
         _SendUserCompletion();

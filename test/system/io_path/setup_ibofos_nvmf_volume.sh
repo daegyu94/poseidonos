@@ -12,13 +12,13 @@ DEFAULT_CLEAN_BRINGUP=1
 DEFAULT_TRANSPORT=TCP
 DEFAULT_TARGET_IP=127.0.0.1  # CI Server VM IP
 DEFAULT_SUBSYSTEM_COUNT=1
-DEFAULT_WRITE_BUFFER_SIZE_IN_MB=1024
+DEFAULT_WRITE_BUFFER_SIZE_IN_MB=3072
 DEFAULT_NUM_SHARED_BUFFER=4096
 DEFAULT_VOLUME_COUNT=1
 DEFAULT_VOLUME_SIZE=2147483648B
 DEFAULT_IRQ_DEDICATION=FALSE
-DEFAULT_USER_DEVICE_LIST="-d unvme-ns-0,unvme-ns-1,unvme-ns-2"
-DEFAULT_SPARE_DEVICE_LIST="-s unvme-ns-3"
+DEFAULT_USER_DEVICE_LIST="-d unvme-ns-0,unvme-ns-1,unvme-ns-2,unvme-ns-3,unvme-ns-4"
+DEFAULT_SPARE_DEVICE_LIST=""
 PMEM_ENABLED=0
 ARRAYNAME=POSArray
 CLI=${ROOT_DIR}/bin/poseidonos-cli
@@ -57,7 +57,7 @@ ibofos_bringup(){
         fi
         sudo $SPDK_DIR/scripts/rpc.py bdev_pmem_create ${PMEM_POOL} -n pmem0
     else
-        sudo ${CLI} device create -d uram0 --num-blocks $((WRITE_BUFFER_SIZE_IN_MB*1024*1024/URAM_BLOCK_SIZE)) --block-size ${URAM_BLOCK_SIZE} --device-type uram
+        sudo ${CLI} device create -d uram0 --num-blocks $((WRITE_BUFFER_SIZE_IN_MB*1024*1024/URAM_BLOCK_SIZE)) --block-size ${URAM_BLOCK_SIZE} --device-type uram --numa 1
     fi
 	
     sudo $ROOT_DIR/bin/poseidonos-cli device scan

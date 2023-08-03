@@ -64,8 +64,12 @@ public:
 
     bool Contain(const KeyType &key) {
         int id = GetShardId(key.blk_rba);
-        
-        pthread_rwlock_wrlock(&locks_[id]);
+         
+        if (policy_ == kFIFOPolicy) {
+            pthread_rwlock_rdlock(&locks_[id]);
+        } else {
+            pthread_rwlock_wrlock(&locks_[id]);
+        }
         bool ret = caches_[id]->Contain(key);
         pthread_rwlock_unlock(&locks_[id]);
         
@@ -80,34 +84,47 @@ public:
         pthread_rwlock_unlock(&locks_[id]);
     }
 
+    /* it should be success for write, okay to be failed for read */
     int Get(const KeyType &key, ValueType &value, 
             const RequestExtent &request_extent, 
-            uintptr_t &inv_blk_addr) {
+            uintptr_t &inv_blk_addr, bool is_read) {
         int id = GetShardId(key.blk_rba);
-    RETRY: 
+        constexpr int max_retry_cnt = 3;
+        int retry_cnt = 0;
+        int ret;
+
+    retry_cache_op: 
+        if (is_read && (retry_cnt++ == max_retry_cnt)) {
+                ret = 0;
+                goto out;
+        }
+
         if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
             pthread_rwlock_rdlock(&locks_[id]);
         } else {
             pthread_rwlock_wrlock(&locks_[id]);
         }
-        int ret = caches_[id]->Get(key, value, request_extent, inv_blk_addr);
+        ret = caches_[id]->Get(key, value, request_extent, inv_blk_addr);
         pthread_rwlock_unlock(&locks_[id]);
-        if (ret < 0)
-            goto RETRY;
-        
+        if (ret < 0) {
+            goto retry_cache_op;
+        }
+
+    out:
         assert(ret >= 0);
 
         return ret;
     }
 
+    /* it should be success by retrying */
     bool Delete(const KeyType &key, ValueType &value) {
         int id = GetShardId(key.blk_rba);
-    RETRY:
+    retry_cache_op:
         pthread_rwlock_wrlock(&locks_[id]);
         int ret = caches_[id]->Delete(key, value);
         pthread_rwlock_unlock(&locks_[id]);
         if (ret == -1) 
-            goto RETRY;
+            goto retry_cache_op;
 
         return ret;
     }

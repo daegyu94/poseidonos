@@ -16,7 +16,7 @@ build_pos()
     else
         cmake . -DSPDK_DEBUG_ENABLE=n -DUSE_LOCAL_REPO=n -DASAN_ENABLE=${BUILD_ASAN}
     fi
-    make -j 4
+    make -j 20
 
     cd $rootdir
     make clean
@@ -25,7 +25,7 @@ build_pos()
     else
         ./configure --without-asan
     fi
-    make -j 8
+    make -j 20
 }
 
 while getopts "i" opt

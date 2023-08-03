@@ -62,9 +62,11 @@ void ReadCache::Initialize() {
     bufferPool_ = memoryManager_->CreateBufferPool(info, 0);
     assert(bufferPool_ != nullptr);
     
-    /* cache op: frontend reactor (get/delete) + event reactor (put/evict) */
-    int num_shards = AccelEngineApi::GetReactorCount();
-    size_t num_buffers = info.count;
+    max_num_buffers_ = info.count;
+    num_buffers_.store(0);
+
+    /* frontend reactor (get/delete) + event reactor (put/evict) * 1.5x */
+    int num_shards = AccelEngineApi::GetReactorCount() * 3 / 2;
     std::string policyStr;
     int policy = kFIFOFastEvictionPolicy;
 
@@ -76,12 +78,12 @@ void ReadCache::Initialize() {
         policy = iter->second;
     }
    
-    cache_ = new FixedSizedCache(num_buffers, policy, num_shards);
+    cache_ = new FixedSizedCache(max_num_buffers_, policy, num_shards);
 
     printf("Initialize ReadCache: policy=%s, "
-            "cache_size_mb=%lu, num_buffers=%lu, extent_size=%lu, "
+            "cache_size_mb=%lu, max_num_buffers=%lu, extent_size=%lu, "
             "num_shards=%d\n", 
             policyStr.c_str(), 
-            cache_size_mb, num_buffers, extent_size, num_shards);
+            cache_size_mb, max_num_buffers_, extent_size, num_shards);
 }
 } // namespace pos

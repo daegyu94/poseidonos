@@ -1,5 +1,7 @@
 #!/bin/bash
 
+hugemem_kb_=$1
+
 # change working directory to where script exists
 cd $(dirname $0)
 
@@ -14,20 +16,25 @@ cd ../lib/spdk/scripts;
 
 totalmem_kb=$(cat /proc/meminfo | grep MemTotal | awk '{print $2}')
 
-
-if [ "$totalmem_kb" -lt "$MEMORY_LEVEL_1_32GB" ]; then
+if [ ! -z "$hugemem_kb_" ]; then
+  let hugemem_kb=${hugemem_kb_}
+  echo "Setting hugemem_kb=$hugemem_kb_, $hugemem_kb"
+else
+  if [ "$totalmem_kb" -lt "$MEMORY_LEVEL_1_32GB" ]; then
     let hugemem_kb=${totalmem_kb}/3
     let hugemem_kb=${hugemem_kb}*2
 
     echo "Setting maximum # of Huge Page Size is 2/3 of Total Memory Size"
-elif [ "$totalmem_kb" -lt "$MEMORY_LEVEL_2_256GB" ]; then
+  elif [ "$totalmem_kb" -lt "$MEMORY_LEVEL_2_256GB" ]; then
     let hugemem_kb=${totalmem_kb}/2
 
     echo "Setting maximum # of Huge Page Size is 1/2 of Total Memory Size"
-else
+  else
     let hugemem_kb=128*1024*1024
 
     echo "Setting maximum # of Huge Page Size is 128GB"
+  fi
+
 fi
 
 let hugemem_nr=${hugemem_kb}/2/1024;

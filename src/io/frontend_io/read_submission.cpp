@@ -47,6 +47,13 @@
 #include "src/include/pos_event_id.hpp"
 #include "src/read_cache/read_cache.h"
 
+//#define READCACHE_READ_BREAKDOWN
+#ifdef READCACHE_READ_BREAKDOWN
+#define read_br_airlog(n, f, i, k) airlog(n, f, i, k)
+#else
+#define read_br_airlog(n, f, i, k) do {} while (0)
+#endif
+
 namespace pos
 {
 ReadSubmission::ReadSubmission(VolumeIoSmartPtr volumeIo, BlockAlignment* blockAlignment_, Merger* merger_, Translator* translator_)
@@ -102,9 +109,9 @@ bool ReadSubmission::_IsSingleBlockCached(void) {
         uint32_t volume_id = volumeIo->GetVolumeId();
         std::pair<BlkAddr, bool> blk_addr_p = std::make_pair(blk_addr, false);
 
+        read_br_airlog("LAT_SingleBlockRead", "begin", volume_id, blk_addr);
+        
         ret = read_cache->Get(array_id, volume_id, blk_addr_p, addr);
-
-        //airlog("HIST_ReadCache", "read_blk_cnt", volume_id, 1);
 
         if (ret) {
             void *src = (void *) (addr + blockAlignment->GetHeadPosition());
@@ -121,12 +128,15 @@ bool ReadSubmission::_IsSingleBlockCached(void) {
                         kMemcpyInProgress);
             }
 
-            airlog("CNT_ReadCache", "hit_single", volume_id, 1);
+            airlog("CNT_ReadCacheRead", "hit_single", volume_id, 1);
             volumeIo->GetCallback()->Execute(); /* trigger aio completion */
             volumeIo = nullptr;
         } else {
-            airlog("CNT_ReadCache", "miss_single", volume_id, 1);
+            airlog("CNT_ReadCacheRead", "miss_single", volume_id, 1);
         }
+        read_br_airlog("LAT_SingleBlockRead", "end", volume_id, blk_addr);
+        
+        airlog("HIST_ReadCache", "read_blk_cnt", volume_id, 1);
     }
 
     return ret;
@@ -218,12 +228,11 @@ bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
         std::vector<std::pair<BlkAddr, bool>> blk_addr_p_vec;
         int array_id = volumeIo->GetArrayId();
         uint32_t volume_id = volumeIo->GetVolumeId();
-
-        //airlog("HIST_ReadCache", "read_blk_cnt", spVolumeIo->GetVolumeId(), 
-        //        blockCount);
-
+        
+        read_br_airlog("LAT_MergedBlocksRead", "begin", volume_id, blk_addr);
+        
         uint32_t num_found = read_cache->Scan(array_id, volume_id, blk_addr, 
-                blockCount, addrs, blk_addr_p_vec);
+                blockCount, addrs, blk_addr_p_vec, true);
         
         assert(blockCount >= num_found);
 
@@ -263,16 +272,14 @@ bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
                 }
             }
             
-            airlog("CNT_ReadCache", "hit_merged", volume_id, blockCount);
+            airlog("CNT_ReadCacheRead", "hit_merged", volume_id, blockCount);
             /* ReadCompletion will destroy spVolumeIo */
             spVolumeIo->GetCallback()->Execute();
 
             cached = true;
         } else {
-            if (!num_found) {
-                airlog("CNT_ReadCache", "miss_merged_all", volume_id, 
-                        blockCount);
-            } else {
+            /* hit partial */
+            if (num_found) {
                 for (auto iter = blk_addr_p_vec.begin(); 
                         iter != blk_addr_p_vec.end(); 
                         iter++) {
@@ -287,11 +294,15 @@ bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
                                 blk_addr, kMemcpyInProgress);
                     }
                 }
-
-                airlog("CNT_ReadCache", "miss_merged_partial", volume_id, 
-                        num_found);
+                airlog("CNT_ReadCacheRead", "miss_merged_partial", volume_id, 
+                        blockCount - num_found);
             }
+            airlog("CNT_ReadCacheRead", "miss_merged", volume_id, blockCount);
         }
+
+        read_br_airlog("LAT_MergedBlocksRead", "end", volume_id, blk_addr);
+        
+        airlog("HIST_ReadCache", "read_blk_cnt", volume_id, blockCount);
     }
 
     return cached;

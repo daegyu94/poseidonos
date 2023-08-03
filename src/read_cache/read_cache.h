@@ -63,13 +63,14 @@ public:
         ValueType value = nullptr;
         RequestExtent request_extent(blk_addr, 1);
         uintptr_t inv_blk_addr = 0;
+        bool is_buffer_util_high = is_buffer_util_high_;
 
-        int ret = cache_->Get(key, value, request_extent, inv_blk_addr); 
+        int ret = cache_->Get(key, value, request_extent, inv_blk_addr, true); 
         if (ret > 0)
             addr = ((Extent *) value)->addr + 
                 extent_offset(blk_addr) * BLOCK_SIZE;
 
-        if (inv_blk_addr) {
+        if (inv_blk_addr && is_buffer_util_high) {
             blk_addr_p.second = true;
         }
         
@@ -85,8 +86,8 @@ public:
         if (ret) {
             ReturnBuffer(((Extent *) value)->addr); 
             delete (Extent *) value;
-            // FIXME: other metric
-            //airlog("CNT_ReadCache", "succ_evict", 0, 1); 
+            
+            airlog("CNT_ReadCacheBuffer", "succ_evict", 0, 1); 
         }
 
         return ret;
@@ -94,13 +95,15 @@ public:
 
     uint32_t Scan(int array_id, uint32_t volume_id, BlkAddr _blk_addr, 
             uint32_t block_count, std::vector<std::pair<uintptr_t, bool>> &addrs, 
-            std::vector<std::pair<BlkAddr, bool>> &blk_addr_p_vec) {
+            std::vector<std::pair<BlkAddr, bool>> &blk_addr_p_vec, 
+            bool is_read = false) {
         BlkAddr blk_addr = _blk_addr;
         BlkAddr end_blk_addr = _blk_addr + block_count - 1;
         uint32_t num_remain_blocks = block_count;
         uint32_t num_found = 0;
         int vec_idx = 0;
-
+        bool is_buffer_util_high = is_buffer_util_high_;
+        
         while (true) {
             uint32_t diff1 = blocks_per_extent - extent_offset(blk_addr);
             uint32_t diff2 = end_blk_addr - blk_addr + 1;
@@ -113,10 +116,10 @@ public:
             RequestExtent request_extent(blk_addr, count);
 
             /* write-through: should be succeeded for data consistency */
-            cache_->Get(key, value, request_extent, inv_blk_addr);
+            cache_->Get(key, value, request_extent, inv_blk_addr, is_read);
             
             if (value) {
-                if (inv_blk_addr) {
+                if (inv_blk_addr && is_buffer_util_high) {
                     is_inv = true;
                 }
                 blk_addr_p_vec.push_back(std::make_pair(key.blk_rba, is_inv));
@@ -158,8 +161,10 @@ out:
         ValueType value = nullptr;
 
         cache_->Evict(value);
-        if (!value)
+        if (!value) {
+            airlog("CNT_ReadCacheBuffer", "failed_evict", 0, 1);
             return;
+        }
         
         //Extent *ext = (Extent *) value;
         //printf("Evict extent: blk_addr=%lu, len=%u, addr=%lu, num_set=%u\n", 
@@ -169,20 +174,22 @@ out:
 
         delete (Extent *) value;
 
-        airlog("CNT_ReadCache", "succ_evict", 0, 1);
+        airlog("CNT_ReadCacheBuffer", "succ_evict", 0, 1);
     }
 
     uintptr_t TryGetBuffer(void) {
         uintptr_t ret = (uintptr_t) bufferPool_->TryGetBuffer();
         if (ret) {
-            airlog("CNT_ReadCache", "pool", 0, 1);
+            num_buffers_.fetch_add(1);
+            airlog("CNT_ReadCacheBuffer", "pool", 0, extent_size);
         }
         return ret;
     }
 
     void ReturnBuffer(uintptr_t addr) {
+        num_buffers_.fetch_sub(1);
         bufferPool_->ReturnBuffer((void *) addr); 
-        airlog("CNT_ReadCache", "pool", 0, -1);
+        airlog("CNT_ReadCacheBuffer", "pool", 0, -extent_size);
     }
 
     BufferPool *GetBufferPool(void) {
@@ -202,6 +209,24 @@ out:
 
     bool IsEnabledCheckCache(void) const {
         return testType_ == kNoTest || testType_ == kCacheOpOnly;
+    }
+    
+    void UpdateBufferUtil(void) {
+        /* TODO: condition for fifo fast eviction */
+        //if (0) {
+        //    return;
+        //}
+
+        if (request_cnt_++ % 100) {
+            return;
+        }
+
+        unsigned int util = (100UL * num_buffers_.load()) / max_num_buffers_;
+        if (util > buffer_util_threshold_) {
+            is_buffer_util_high_ = true;
+        } else {
+            is_buffer_util_high_ = false;
+        }
     }
 
 private:
@@ -230,7 +255,12 @@ private:
     /* memory pool for cached block */
     MemoryManager *memoryManager_;
     BufferPool *bufferPool_;
-    
+    size_t max_num_buffers_;
+    std::atomic<size_t> num_buffers_;
+    unsigned int buffer_util_threshold_ = 95;
+    bool is_buffer_util_high_ = false;
+    uint64_t request_cnt_ = 0;
+
     FixedSizedCache *cache_;
 };
 

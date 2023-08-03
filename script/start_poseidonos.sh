@@ -1,11 +1,14 @@
 #!/bin/bash
 
+need_setup_env=$1
+hugemem_kb=$2
+
 ROOT_DIR=$(readlink -f $(dirname $0))/../
 binary_name=poseidonos
 
 setup_environment()
 {
-    ${ROOT_DIR}/script/setup_env.sh
+    ${ROOT_DIR}/script/setup_env.sh $1
     rm -rf /dev/shm/ibof_nvmf_trace*
 }
 
@@ -15,6 +18,7 @@ execute_ibofos()
     then
         echo "Execute poseidonos"
         nohup ${ROOT_DIR}/bin/$binary_name > /dev/null 2>&1 &
+        #${ROOT_DIR}/bin/$binary_name &
     else
         echo "No executable poseidonos file"
         exit -1
@@ -50,11 +54,13 @@ wait_started()
     done
 }
 
-if [[ ! -z "$1" ]];then
-    binary_name=$1
-fi
+#if [[ ! -z "$1" ]];then
+#    binary_name=$1
+#fi
 
-setup_environment
+if [ ! -z "$need_setup_env" ]; then
+  setup_environment $hugemem_kb
+fi
 execute_ibofos
 wait_started
 

@@ -66,6 +66,13 @@
 /*To do Remove after adding array Idx by Array*/
 #include "src/array_mgmt/array_manager.h"
 
+//#define READCACHE_WRITE_BREAKDOWN
+#ifdef READCACHE_WRITE_BREAKDOWN
+#define write_br_airlog(n, f, i, k) airlog(n, f, i, k)
+#else
+#define write_br_airlog(n, f, i, k) do {} while (0)
+#endif
+
 namespace pos
 {
 WriteSubmission::WriteSubmission(VolumeIoSmartPtr volumeIo)
@@ -135,13 +142,15 @@ void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
         int array_id = volumeIo->GetArrayId();
         uint32_t volume_id = volumeIo->GetVolumeId();
 
-        uint32_t num_found = read_cache->Scan(array_id, volume_id, blk_addr, 
-                blockCount, addrs, blk_addr_p_vec);
+        write_br_airlog("LAT_BlocksUpdate", "begin", volume_id, blk_addr);
+
+        //uint32_t num_found = 
+        read_cache->Scan(array_id, volume_id, blk_addr, blockCount, addrs, 
+                blk_addr_p_vec);
         
         uintptr_t buffer_addr = (uintptr_t) volumeIo->GetBuffer();
         for (uint32_t i = 0; i < blockCount; i++) {
             size_t size = blockAlignment.GetDataSize(i); 
-            
             /* bypass memcpy if extent will be invalidated */
             if (addrs[i].first && !addrs[i].second) {
                 void *src = (void *) buffer_addr;
@@ -149,6 +158,8 @@ void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
                         blockAlignment.GetHeadPosition());
                 
                 memcpy(dst, src, size);
+                
+                airlog("CNT_ReadCacheWrite", "succ_update", volume_id, 1);
 
                 //printf("(%u, %d) buffer_addr=%lu, src=%lu, dst=%lu 
                 //      "(addr=%lu, headpos=%u), size=%lu\n", 
@@ -165,7 +176,6 @@ void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
                 iter++) {
             BlkAddr blk_addr = iter->first;
             bool is_inv = iter->second;
-
             if (is_inv) {
                 uintptr_t addr = 0;
                 read_cache->Delete(array_id, volume_id, blk_addr, addr);
@@ -175,8 +185,9 @@ void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
             }
         }
 
-        airlog("CNT_ReadCache", "succ_inv", volume_id, num_found);
-        //airlog("HIST_ReadCache", "write_blk_cnt", volume_id, blockCount);
+        write_br_airlog("LAT_BlocksUpdate", "end", volume_id, blk_addr);
+        
+        airlog("HIST_ReadCache", "write_blk_cnt", volume_id, blockCount);
     }
 }
 

@@ -169,6 +169,9 @@ public:
             if (cur_bucket->hash == hash && 
                     ((Extent *) cur_bucket->value)->key == key) {
                 value = cur_bucket->value;
+                if (policy_ == kFIFOFastEvictionPolicy) {
+                    ((Extent *) value)->bitmap->ResetBitmap();
+                }
                 succ = true;
                 break;
             }
@@ -232,19 +235,21 @@ public:
                         policy_ == kDemotionPolicy) {
                     unsigned offset = extent_offset(request_extent.blk_addr);
                     for (unsigned i = 0; i < request_extent.len; i++) {
-                        if (!extent->bitmap->IsSetBit(offset + i)) {
-                            extent->bitmap->SetBit(offset + i);
-                        }
+                        //if (!extent->bitmap->IsSetBit(offset + i)) {
+                        extent->bitmap->SetBit(offset + i);
+                        //}
                     }
 
                     uint64_t num_bits_set = extent->bitmap->GetNumBitsSet(); 
+                    int util = 100 * num_bits_set / blocks_per_extent;
                     
-                    if (num_bits_set == blocks_per_extent) {
+                    /* prevent waste (amplification) */
+                    if (util > 80 || (util && util < 20)) {
+                    //if (num_bits_set == blocks_per_extent)
                         inv_blk_addr = key.blk_rba;
                     }
 
                     if (policy_ == kDemotionPolicy) {
-                        int util = 100 * num_bits_set / blocks_per_extent;
                         if (util >= 90) {
                             value_list_->Demote(extent);
 

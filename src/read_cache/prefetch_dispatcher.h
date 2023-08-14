@@ -20,6 +20,8 @@ public:
     
 private:
     uint64_t request_cnt_;
+    uint64_t per_core_request_cnt_ = 0;
+
     std::vector<uint32_t> event_reactor_cpu_vec_;
     std::vector<uint32_t> frontend_io_reactor_cpu_vec_;
     size_t event_reactor_cnt_; 

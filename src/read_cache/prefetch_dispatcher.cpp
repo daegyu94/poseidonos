@@ -142,8 +142,19 @@ void PrefetchDispatcher::IssueFrontendIO(PrefetchMeta *meta, uintptr_t addr,
     posIo->arrayName = arrayName; 
     posIo->array_id = array_id;
     posIo->complete_cb = frontend_io_complete;
-    
+#if 1
+    if (!(per_core_request_cnt_++ % 256)) {
+        request_cnt_++;
+        usleep(10);
+    }
+    if (!(per_core_request_cnt_ % 32)) {
+        usleep(10);
+    }
+
+    int core = event_reactor_cpu_vec_[request_cnt_ % event_reactor_cnt_];
+#else
     int core = event_reactor_cpu_vec_[request_cnt_++ % event_reactor_cnt_];
+#endif
     //int core = frontend_io_reactor_cpu_vec_[request_cnt_++ % frontend_io_reactor_cnt_];
 
     auto eventFrameworkApi = EventFrameworkApiSingleton::Instance();

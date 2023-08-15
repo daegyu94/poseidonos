@@ -37,7 +37,8 @@ else
 
 fi
 
-let hugemem_nr=${hugemem_kb}/2/1024;
+#let hugemem_nr=${hugemem_kb}/2/1024;
+let hugemem_nr=${hugemem_kb}/1024/1024; # 1GB hugepage
 sudo HUGE_EVEN_ALLOC=yes NRHUGE=${hugemem_nr} ./setup.sh; 
 cd -;
 

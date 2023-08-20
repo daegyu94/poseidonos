@@ -145,10 +145,9 @@ public:
 
                     vec_idx++;
                     num_remain_blocks--;
-                }
-
-                if (num_remain_blocks == 0) {
-                    goto out;
+                    if (num_remain_blocks == 0) {
+                        goto out;
+                    }
                 }
             } else {
                 /* allocate buffer if possible and memcpy */

@@ -16,12 +16,7 @@
 #endif
 
 namespace pos {
-enum {
-    kNoTest = 0,
-    kGrpcOnly,
-    kPrefetchOnly,
-    kCacheOpOnly,
-};
+constexpr int MAX_GET_BUFFER_RETRY_CNT = 1;
 
 class ReadCache {
 public:
@@ -35,11 +30,10 @@ public:
     
     void Initialize();
     
-    void Put(int array_id, uint32_t volume_id, BlkAddr blk_addr, uintptr_t addr) {
+    void Put(int array_id, uint32_t volume_id, BlkAddr blk_addr, uintptr_t addr, 
+            uint32_t valid_offset = 0, uint32_t valid_block_count = 0) {
         KeyType key(array_id, volume_id, blk_addr);
-        ValueType value = new Extent(key, addr, 
-                extent_size > max_prefetch_size ? 
-                extent_size / max_prefetch_size : 1);
+        ValueType value = new Extent(key, addr, valid_offset, valid_block_count); 
 
         cache_->Put(key, value);
     }
@@ -56,24 +50,25 @@ public:
         cache_->ClearInProgress(key, in_progress_type);
     }
     
-    bool Get(int array_id, uint32_t volume_id, 
+    int Get(int array_id, uint32_t volume_id, 
             std::pair<BlkAddr, bool> &blk_addr_p, uintptr_t &addr) {
         BlkAddr blk_addr = blk_addr_p.first;
         KeyType key(array_id, volume_id, extent_start(blk_addr));
         ValueType value = nullptr;
         RequestExtent request_extent(blk_addr, 1);
         uintptr_t inv_blk_addr = 0;
-        bool is_buffer_util_high = is_buffer_util_high_;
 
         int ret = cache_->Get(key, value, request_extent, inv_blk_addr, true); 
-        if (ret > 0)
-            addr = ((Extent *) value)->addr + 
-                extent_offset(blk_addr) * BLOCK_SIZE;
-
-        if (inv_blk_addr && is_buffer_util_high) {
-            blk_addr_p.second = true;
+        if (ret > 0) {
+            Extent *extent = (Extent *) value;
+            uint32_t blk_addr_offset = extent_offset(blk_addr);
+            if (!extent->bitmap->IsSetBit(blk_addr_offset)) {
+                ret = -1;
+            } else {
+                addr = extent->addr + blk_addr_offset * BLOCK_SIZE;
+            }
         }
-        
+
         return ret;
     }
     
@@ -93,6 +88,116 @@ public:
         return ret;
     }
 
+    void AdmitOrUpdate(int array_id, uint32_t volume_id, BlkAddr _blk_addr, 
+            uint32_t block_count, 
+            std::vector<std::pair<uintptr_t, bool>> &addr_p_vec, 
+            std::vector<std::pair<BlkAddr, bool>> &blk_addr_p_vec) {
+        BlkAddr blk_addr = _blk_addr;
+        BlkAddr end_blk_addr = _blk_addr + block_count - 1;
+        uint32_t num_remain_blocks = block_count;
+        int vec_idx = 0;
+        BlkAddr key_blk_addr_in_progress = -1;
+
+        while (true) {
+            uint32_t blk_addr_offset = extent_offset(blk_addr);
+            uint32_t diff1 = blocks_per_extent - blk_addr_offset;
+            uint32_t diff2 = end_blk_addr - blk_addr + 1;
+            uint32_t count = diff1 > diff2 ? diff2 : diff1;
+            uintptr_t inv_blk_addr = 0;
+            
+            BlkAddr cur_key_blk_addr = extent_start(blk_addr);
+            KeyType key(array_id, volume_id, cur_key_blk_addr);
+            ValueType value = nullptr;
+            RequestExtent request_extent(blk_addr, count);
+            
+            /* bypass allocated new segment */
+            if (key_blk_addr_in_progress == cur_key_blk_addr) {
+                vec_idx += count;
+                num_remain_blocks -= count;
+                if (num_remain_blocks == 0) {
+                    goto out;
+                }
+                continue;
+            }
+
+            /* write-through: should be succeeded for data consistency */
+            cache_->Get(key, value, request_extent, inv_blk_addr, false);
+
+            if (value) {
+                /* update already cached data */
+                Extent *extent = (Extent *) value;
+                uintptr_t addr = extent->addr;
+                
+                blk_addr_p_vec.push_back(std::make_pair(key.blk_rba, true));
+                
+                for (uint32_t i = blk_addr_offset; i < blk_addr_offset + count; 
+                        i++) {
+                    extent->bitmap->SetBit(i);
+
+                    addr_p_vec.insert(addr_p_vec.begin() + vec_idx, 
+                            std::make_pair(addr + (i * BLOCK_SIZE), true));
+
+                    rc_debug("hit: blk_addr=%lu, vec_idx=%d, addr=%lu, "
+                            "block_count=(%u, %u, %u)\n",
+                            blk_addr + i, vec_idx, 
+                            addr_p_vec[vec_idx].first, 
+                            block_count, num_remain_blocks, count);
+
+                    vec_idx++;
+                    num_remain_blocks--;
+                }
+
+                if (num_remain_blocks == 0) {
+                    goto out;
+                }
+            } else {
+                /* allocate buffer if possible and memcpy */
+                int retry_cnt = 0;
+                uintptr_t addr;
+
+                while (retry_cnt++ < MAX_GET_BUFFER_RETRY_CNT) {
+                    addr = TryGetBuffer();
+                    if (addr) {
+                        break;
+                    }
+                    Evict();
+                }
+
+                if (!addr) {
+                    vec_idx += count;
+                    goto alloc_failed;
+                }
+
+                Put(array_id, volume_id, cur_key_blk_addr, addr, 
+                        blk_addr_offset, count);
+
+                for (uint32_t i = blk_addr_offset; i < blk_addr_offset + count; 
+                        i++) {
+                    addr_p_vec.insert(addr_p_vec.begin() + vec_idx++, 
+                            std::make_pair(addr + (i * BLOCK_SIZE), true));
+                }
+
+                blk_addr_p_vec.push_back(
+                        std::make_pair(cur_key_blk_addr, true));
+
+                key_blk_addr_in_progress = cur_key_blk_addr;
+
+alloc_failed:
+                rc_debug("miss: blk_addr=%lu, block_count=(%u, %u, %u)\n",
+                        blk_addr, block_count, num_remain_blocks, count);
+                num_remain_blocks -= count;
+                if (num_remain_blocks == 0) {
+                    goto out;
+                }
+            }
+
+            blk_addr += count;
+            assert(extent_offset(blk_addr) == 0); 
+        }
+out:
+        return; 
+    }
+
     uint32_t Scan(int array_id, uint32_t volume_id, BlkAddr _blk_addr, 
             uint32_t block_count, std::vector<std::pair<uintptr_t, bool>> &addrs, 
             std::vector<std::pair<BlkAddr, bool>> &blk_addr_p_vec, 
@@ -102,14 +207,13 @@ public:
         uint32_t num_remain_blocks = block_count;
         uint32_t num_found = 0;
         int vec_idx = 0;
-        bool is_buffer_util_high = is_buffer_util_high_;
         
         while (true) {
-            uint32_t diff1 = blocks_per_extent - extent_offset(blk_addr);
+            uint32_t blk_addr_offset = extent_offset(blk_addr);
+            uint32_t diff1 = blocks_per_extent - blk_addr_offset;
             uint32_t diff2 = end_blk_addr - blk_addr + 1;
             uint32_t count = diff1 > diff2 ? diff2 : diff1;
             uintptr_t inv_blk_addr = 0;
-            bool is_inv = false;
 
             KeyType key(array_id, volume_id, extent_start(blk_addr));
             ValueType value = nullptr;
@@ -119,17 +223,22 @@ public:
             cache_->Get(key, value, request_extent, inv_blk_addr, is_read);
             
             if (value) {
-                if (inv_blk_addr && is_buffer_util_high) {
-                    is_inv = true;
-                }
+                Extent *extent = ((Extent *) value);
+                uintptr_t addr = extent->addr;
+                bool is_inv = inv_blk_addr ? true : false;
+                
                 blk_addr_p_vec.push_back(std::make_pair(key.blk_rba, is_inv));
 
-                uintptr_t addr = ((Extent *) value)->addr;
-                for (uint64_t i = extent_offset(blk_addr); i < blocks_per_extent; 
-                        i++) {
-                    addrs.insert(addrs.begin() + vec_idx++, 
-                            std::make_pair(addr + (i * BLOCK_SIZE), is_inv));
-                    num_found++;
+                for (uint32_t i = blk_addr_offset; i < blocks_per_extent; i++) {
+                    bool is_valid = extent->bitmap->IsSetBit(i);
+                    if (is_valid) {
+                        addrs.insert(addrs.begin() + vec_idx, 
+                                std::make_pair(addr + (i * BLOCK_SIZE), 
+                                    is_valid));
+                        num_found++;
+                    }
+                    vec_idx++;
+
                     rc_debug("hit: blk_addr=%lu, vec_idx=%d, addr=%lu, "
                             "block_count=(%u, %u, %u)\n",
                             blk_addr + i, vec_idx - 1, addrs[vec_idx - 1].first, 
@@ -149,6 +258,7 @@ public:
                     goto out;
                 }
             }
+
             blk_addr += count;
             assert(extent_offset(blk_addr) == 0); 
         }
@@ -200,17 +310,6 @@ out:
         return enabled_;
     }
     
-    bool IsEnabledPrefetch(void) const {
-        if (testType_ == kGrpcOnly || testType_ == kCacheOpOnly)
-            return false;
-        else
-            return true;
-    }
-
-    bool IsEnabledCheckCache(void) const {
-        return testType_ == kNoTest || testType_ == kCacheOpOnly;
-    }
-    
     void UpdateBufferUtil(void) {
         /* TODO: condition for fifo fast eviction */
         //if (0) {
@@ -237,19 +336,10 @@ private:
      *
      */
     bool enabled_;
-    int testType_;
     
     std::map<std::string, int> cachePolicyMap_ = {
         {"FIFOPolicy", kFIFOPolicy},
         {"FIFOFastEvictionPolicy", kFIFOFastEvictionPolicy},
-        {"DemotionPolicy", kDemotionPolicy}
-    };
-
-    std::map<std::string, int> testTypeMap_ = {
-        {"no_test", kNoTest},
-        {"grpc_only", kGrpcOnly},
-        {"prefetch_only", kPrefetchOnly},
-        {"cache_op_only", kCacheOpOnly}
     };
 
     /* memory pool for cached block */

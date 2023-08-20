@@ -4,6 +4,8 @@
 #include "src/read_cache/cache_const.h"
 
 namespace pos {
+constexpr int MAX_GET_RETRY_CNT = 1;
+
 class FixedSizedCache {
 public:
     FixedSizedCache(size_t max_size, int policy, int num_shards) : 
@@ -26,17 +28,11 @@ public:
                     caches_[i] = new ExtentCache(max_size_ / num_shards_, 
                             kFIFOFastEvictionPolicy);
                     break;
-                case kDemotionPolicy:
-                    caches_[i] = new ExtentCache(max_size_ / num_shards_, 
-                            kDemotionPolicy);
-                    break;
                 default:
                     throw std::runtime_error("wrong cache policy" + 
                             std::to_string(policy_));
             }
         }
-        
-        timestamps_ = new uint64_t[num_shards_]();
     }
 
     ~FixedSizedCache() {
@@ -46,7 +42,6 @@ public:
         }
         delete[] caches_;
         delete[] locks_;
-        delete[] timestamps_;
     }
     
     /* blk_rba must be extent aligned, except for update extent meta */
@@ -55,9 +50,6 @@ public:
         int id = GetShardId(key.blk_rba);
         
         pthread_rwlock_wrlock(&locks_[id]);
-        if (policy_ == kDemotionPolicy) {
-            ((Extent *) value)->timestamp = timestamps_[id]++;
-        }
         caches_[id]->Put(key, value);
         pthread_rwlock_unlock(&locks_[id]);
     }
@@ -89,12 +81,11 @@ public:
             const RequestExtent &request_extent, 
             uintptr_t &inv_blk_addr, bool is_read) {
         int id = GetShardId(key.blk_rba);
-        constexpr int max_retry_cnt = 3;
         int retry_cnt = 0;
         int ret;
 
     retry_cache_op: 
-        if (is_read && (retry_cnt++ == max_retry_cnt)) {
+        if (is_read && (retry_cnt++ == MAX_GET_RETRY_CNT)) {
                 ret = 0;
                 goto out;
         }

@@ -18,20 +18,6 @@ void ReadCache::Initialize() {
 
     configManager.GetValue(module, "enable", &enabled_, CONFIG_TYPE_BOOL);
  
-    testType_ = kNoTest;
-    std::string testTypeStr;
-#if 0
-    configManager.GetValue(module, "test_type", &testTypeStr, 
-            CONFIG_TYPE_STRING);
-    
-    auto testTypeIter = testTypeMap_.find(testTypeStr);
-    if (testTypeIter != testTypeMap_.end()) {
-        testType_ = testTypeIter->second;
-        if (testType_ != kNoTest) {
-            enabled_ = true;
-        }
-    }
-#endif
     if (!enabled_) {
         return;
     }

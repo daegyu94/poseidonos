@@ -1,4 +1,0 @@
-
-namespace pos {
-
-} // namespace pos

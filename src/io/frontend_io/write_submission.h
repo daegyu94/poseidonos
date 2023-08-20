@@ -101,6 +101,5 @@ private:
     void _SetupVolumeIo(VolumeIoSmartPtr newVolumeIo, VirtualBlksInfo& virtualBlksInfo,
         CallbackSmartPtr callback);
     void _UpdateCache(BlkAddr);
-    void _InvalidateCache(BlkAddr);
 };
 } // namespace pos

@@ -10,7 +10,6 @@ enum KeyState {
 enum cachePolicy {
     kFIFOPolicy = 0,
     kFIFOFastEvictionPolicy,
-    kDemotionPolicy,
     kMaxPolicy
 };
 

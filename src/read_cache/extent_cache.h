@@ -60,8 +60,7 @@ public:
             Extent *extent;
 
             list_for_each_entry(extent, list_head, list) {
-                if (extent->prefetch_in_progress.load() || 
-                        extent->memcpy_in_progress.load())
+                if (extent->memcpy_in_progress.load())
                     continue;
 
                 evicted_value = extent;
@@ -73,29 +72,9 @@ public:
         void Evict(ValueType &evicted_value) {
             if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
                 _Evict(evicted_value, &list_);
-            } else if (policy_ == kDemotionPolicy) {
-                Extent *ext1 = (Extent *) list_entry(list_.next, Extent, list);
-                Extent *ext2 = (Extent *) list_entry(mostly_used_list_.next, Extent, list);
-                
-                /* no entry in the mostly_used_list */
-                if (!ext2) {
-                    _Evict(evicted_value, &list_);
-                    return;
-                }
-                
-                /* To prevent partial or unused extents from remaining in the list */
-                bool is_list_old = ext1->timestamp < ext2->timestamp;
-                if (is_list_old) {
-                    int res = request_cnt_++ % 4; /* 1:3 ratio */
-                    if (res == 0) {
-                        _Evict(evicted_value, &list_);
-                    } else {
-                        _Evict(evicted_value, &mostly_used_list_);
-                    }
-                } else {
-                    _Evict(evicted_value, &mostly_used_list_);
-                }
-            }
+            } else {
+                assert(0);
+            } 
         }
          
         void Print() {
@@ -157,6 +136,7 @@ public:
         assert(value);
         
         value_list_->Insert((Extent *) value); 
+        ((Extent *) value)->memcpy_in_progress.store(true);
     }
 
     bool _Get(const KeyType &key, ValueType &value) {
@@ -198,11 +178,7 @@ public:
             if (cur_bucket->hash == hash && 
                     ((Extent *) cur_bucket->value)->key == key) {
                 Extent *extent = ((Extent *) cur_bucket->value);
-                if (in_progress_type == kPrefetchInProgress) {
-                    extent->prefetch_in_progress--;
-                } else {
-                    extent->memcpy_in_progress.store(false);
-                }
+                extent->memcpy_in_progress.store(false);
                 return;
             }
         }
@@ -223,55 +199,27 @@ public:
             if (cur_bucket->hash == hash && 
                     ((Extent *) cur_bucket->value)->key == key) {
                 Extent *extent = ((Extent *) cur_bucket->value);
-                int prefetch_in_progress = extent->prefetch_in_progress.load();
-                if (prefetch_in_progress) {
-                    ret = -prefetch_in_progress;
-                    break;
-                }
-
-                value = cur_bucket->value;
                 
-                if (policy_ == kFIFOFastEvictionPolicy || 
-                        policy_ == kDemotionPolicy) {
-                    unsigned offset = extent_offset(request_extent.blk_addr);
-                    for (unsigned i = 0; i < request_extent.len; i++) {
-                        //if (!extent->bitmap->IsSetBit(offset + i)) {
-                        extent->bitmap->SetBit(offset + i);
-                        //}
-                    }
-
-                    uint64_t num_bits_set = extent->bitmap->GetNumBitsSet(); 
-                    int util = 100 * num_bits_set / blocks_per_extent;
-                    
-                    /* prevent waste (amplification) */
-                    if (util > 80 || (util && util < 20)) {
-                    //if (num_bits_set == blocks_per_extent)
-                        inv_blk_addr = key.blk_rba;
-                    }
-
-                    if (policy_ == kDemotionPolicy) {
-                        if (util >= 90) {
-                            value_list_->Demote(extent);
-
-                            //printf("Demote: blk_addr=%lu, num_bits_set=%lu , 
-                            //      "util=%d\n",
-                            //        key.blk_rba, num_bits_set, util);
-
-                            /* no need to clear bitmaps due to FIFO */
-                            //extent->bitmap->ClearBits(0, blocks_per_extent);
-                        }
-                        assert(util <= 100);
-                    }
-                }
-
+                value = cur_bucket->value;
                 extent->memcpy_in_progress.store(true);
                 ret = 1;
+
+                /* prevent waste (amplification) => eviction while in list */
+                if (policy_ == kFIFOFastEvictionPolicy) {
+                    int util = 100 * extent->bitmap->GetNumBitsSet() / 
+                        blocks_per_extent;
+                    if (util > 70 || (util && util < 30)) {
+                        inv_blk_addr = key.blk_rba;
+                    }
+                }
+
                 break;
             }
         }
         return ret;
     }
-
+    
+    /* we delete the extent after memcpy if meets invalidation condition */
     int Delete(const KeyType &key, ValueType &value) override {
         Bucket *cur_bucket;
         struct hlist_node *tmp;
@@ -282,16 +230,6 @@ public:
         hlist_for_each_entry_safe(cur_bucket, tmp, &hheads_[bkt_id], hnode) {
             if (cur_bucket->hash == hash && 
                     ((Extent *) cur_bucket->value)->key == key) {
-                Extent *extent = ((Extent *) cur_bucket->value);
-                if (extent->prefetch_in_progress.load()) { 
-                    ret = -1;
-                    break;
-                }
-
-                /* 
-                 * we can delete the entry extent which is fully used 
-                 * don't consider memcpy_in_progress 
-                 */
                 value = cur_bucket->value;
 
                 hlist_del(&cur_bucket->hnode);

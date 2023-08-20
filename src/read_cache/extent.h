@@ -33,20 +33,22 @@ struct Extent {
 
 	struct list_head list; // list
 
-    std::atomic<int> prefetch_in_progress;
     std::atomic<bool> memcpy_in_progress;
     
     BitMap *bitmap;
-    uint64_t timestamp;
 
     Extent() = default; 
 
-    Extent(KeyType key, uint64_t addr, int num_prefetch_in_progress) : 
-        key(key), addr(addr), 
-        prefetch_in_progress{num_prefetch_in_progress}, 
-        memcpy_in_progress{false} {
+    Extent(KeyType key, uint64_t addr, 
+            uint32_t valid_offset, uint32_t valid_block_count) : 
+        key(key), addr(addr), memcpy_in_progress{false} {
             INIT_LIST_HEAD(&list);
             bitmap = new BitMap(blocks_per_extent);
+
+            for (uint32_t i = valid_offset; i < valid_offset + valid_block_count; 
+                    i++) {
+                bitmap->SetBit(i);
+            }
         }
 
     ~Extent() {

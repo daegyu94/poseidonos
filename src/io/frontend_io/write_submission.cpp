@@ -115,58 +115,36 @@ WriteSubmission::~WriteSubmission(void)
 {
 }
 
-void WriteSubmission::_InvalidateCache(BlkAddr blk_addr) {
-    auto read_cache = ReadCacheSingleton::Instance();
-    //BlkAddr alignedblkRba = extent_start(blk_addr);
-    
-    /* TODO: Delete only extent aligned blkrba */
-    for (uint32_t i = 0; i < blockCount; i++) {
-        uintptr_t tmp_addr = 0;
-
-        read_cache->Delete(volumeIo->GetArrayId(), volumeId, 
-                blk_addr + i, tmp_addr);
-    }
-}
-
-/* 
- * FIXME: currently event if extent is fully utilized (100%), 
- * memcpy and then evict, however memcpy is not needed
- */
 void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
     auto read_cache = ReadCacheSingleton::Instance();
 
-    if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache()) {
-        std::vector<std::pair<uintptr_t, bool>> addrs(blockCount, 
+    if (read_cache->IsEnabled()) {
+        std::vector<std::pair<uintptr_t, bool>> addr_p_vec(blockCount, 
                 std::make_pair(0, false));
-        std::vector<std::pair<BlkAddr, bool>> blk_addr_p_vec;
+        std::vector<std::pair<BlkAddr, bool>> blk_addr_p_vec; // keys of extent
         int array_id = volumeIo->GetArrayId();
         uint32_t volume_id = volumeIo->GetVolumeId();
+        uintptr_t buffer_addr = (uintptr_t) volumeIo->GetBuffer();
 
         write_br_airlog("LAT_BlocksUpdate", "begin", volume_id, blk_addr);
 
-        //uint32_t num_found = 
-        read_cache->Scan(array_id, volume_id, blk_addr, blockCount, addrs, 
-                blk_addr_p_vec);
+        read_cache->AdmitOrUpdate(array_id, volume_id, blk_addr, 
+                blockCount, addr_p_vec, blk_addr_p_vec);
         
-        uintptr_t buffer_addr = (uintptr_t) volumeIo->GetBuffer();
         for (uint32_t i = 0; i < blockCount; i++) {
             size_t size = blockAlignment.GetDataSize(i); 
-            /* bypass memcpy if extent will be invalidated */
-            if (addrs[i].first && !addrs[i].second) {
+            /* memcpy only if block is valid, TODO: check second of pair */
+            if (addr_p_vec[i].first) {
                 void *src = (void *) buffer_addr;
-                void *dst = (void *) (addrs[i].first + 
-                        blockAlignment.GetHeadPosition());
-                
+                void *dst = (i == 0) ? 
+                    (void *) (addr_p_vec[i].first + 
+                            blockAlignment.GetHeadPosition()) :
+                    (void *) (addr_p_vec[i].first);
+
                 memcpy(dst, src, size);
                 
                 airlog("CNT_ReadCacheWrite", "succ_update", volume_id, 1);
-
-                //printf("(%u, %d) buffer_addr=%lu, src=%lu, dst=%lu 
-                //      "(addr=%lu, headpos=%u), size=%lu\n", 
-                //        blockCount, i, buffer_addr, (uintptr_t) src, 
-                //        (uintptr_t) dst, addrs[i].first, 
-                //        blockAlignment.GetHeadPosition(), size);
-            }
+            } 
 
             buffer_addr += size; // next block
         }
@@ -174,15 +152,9 @@ void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
         for (auto iter = blk_addr_p_vec.begin(); 
                 iter != blk_addr_p_vec.end(); 
                 iter++) {
-            BlkAddr blk_addr = iter->first;
-            bool is_inv = iter->second;
-            if (is_inv) {
-                uintptr_t addr = 0;
-                read_cache->Delete(array_id, volume_id, blk_addr, addr);
-            } else {
-                read_cache->ClearInProgress(array_id, volume_id, blk_addr, 
-                        kMemcpyInProgress);
-            }
+            BlkAddr key_blk_addr = iter->first;
+            read_cache->ClearInProgress(array_id, volume_id, key_blk_addr, 
+                    kMemcpyInProgress);
         }
 
         write_br_airlog("LAT_BlocksUpdate", "end", volume_id, blk_addr);
@@ -217,12 +189,8 @@ WriteSubmission::Execute(void)
             }
             return false;
         }
-        
-        if (1) {
-            _UpdateCache(startRba);
-        } else {
-            _InvalidateCache(startRba);
-        }
+
+        _UpdateCache(startRba);
 
         bool done = _ProcessOwnedWrite();
         if (unlikely(!done))

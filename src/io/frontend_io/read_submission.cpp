@@ -129,6 +129,21 @@ bool ReadSubmission::_IsSingleBlockCached(void) {
             }
 
             airlog("CNT_ReadCacheRead", "hit_single", volume_id, 1);
+
+            /* copy from  _PrepareSingleBlock() */
+            StripeAddr lsidEntry;
+            bool referenced;
+            std::tie(lsidEntry, referenced) = translator->GetLsidRefResult(0);
+            if (referenced)
+            {
+                CallbackSmartPtr callee(volumeIo->GetCallback());
+                CallbackSmartPtr readCompletion(new ReadCompletion(volumeIo));
+                readCompletion->SetCallee(callee);
+                volumeIo->SetCallback(readCompletion);
+                volumeIo->SetLsidEntry(lsidEntry);
+                callee->SetWaitingCount(1);
+            }
+
             volumeIo->GetCallback()->Execute(); /* trigger aio completion */
             volumeIo = nullptr;
         } else {

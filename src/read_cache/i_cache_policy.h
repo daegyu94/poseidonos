@@ -6,9 +6,8 @@ namespace pos {
 class ICachePolicy {
 public:
     virtual ~ICachePolicy() = default;
-    virtual void Put(const KeyType&, const ValueType &) = 0;
+    virtual uintptr_t Put(const KeyType&, const ValueType &) = 0;
     
-    virtual bool Contain(const KeyType&) { return false; }
     virtual void ClearInProgress(const KeyType&, int) { return; }
 
     virtual int Get(const KeyType&, ValueType &, const RequestExtent &,

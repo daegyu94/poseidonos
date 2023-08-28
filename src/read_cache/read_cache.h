@@ -30,20 +30,14 @@ public:
     
     void Initialize();
     
-    void Put(int array_id, uint32_t volume_id, BlkAddr blk_addr, uintptr_t addr, 
+    uintptr_t Put(int array_id, uint32_t volume_id, BlkAddr blk_addr, uintptr_t addr,
             uint32_t valid_offset = 0, uint32_t valid_block_count = 0) {
         KeyType key(array_id, volume_id, blk_addr);
         ValueType value = new Extent(key, addr, valid_offset, valid_block_count); 
 
-        cache_->Put(key, value);
+        return cache_->Put(key, value);
     }
     
-    bool Contain(int array_id, uint32_t volume_id, BlkAddr blk_addr) {
-        KeyType key(array_id, volume_id, blk_addr);
-
-        return cache_->Contain(key);
-    }
- 
     void ClearInProgress(int array_id, uint32_t volume_id, BlkAddr blk_addr, 
             int in_progress_type) {
         KeyType key(array_id, volume_id, extent_start(blk_addr));
@@ -96,7 +90,6 @@ public:
         BlkAddr end_blk_addr = _blk_addr + block_count - 1;
         uint32_t num_remain_blocks = block_count;
         int vec_idx = 0;
-        BlkAddr key_blk_addr_in_progress = -1;
 
         while (true) {
             uint32_t blk_addr_offset = extent_offset(blk_addr);
@@ -110,16 +103,6 @@ public:
             ValueType value = nullptr;
             RequestExtent request_extent(blk_addr, count);
             
-            /* bypass allocated new segment */
-            if (key_blk_addr_in_progress == cur_key_blk_addr) {
-                vec_idx += count;
-                num_remain_blocks -= count;
-                if (num_remain_blocks == 0) {
-                    goto out;
-                }
-                continue;
-            }
-
             /* write-through: should be succeeded for data consistency */
             cache_->Get(key, value, request_extent, inv_blk_addr, false);
 
@@ -128,7 +111,7 @@ public:
                 Extent *extent = (Extent *) value;
                 uintptr_t addr = extent->addr;
                 
-                blk_addr_p_vec.push_back(std::make_pair(key.blk_rba, true));
+                blk_addr_p_vec.push_back(std::make_pair(key.blk_rba, false));
                 
                 for (uint32_t i = blk_addr_offset; i < blk_addr_offset + count; 
                         i++) {
@@ -153,6 +136,7 @@ public:
                 /* allocate buffer if possible and memcpy */
                 int retry_cnt = 0;
                 uintptr_t addr;
+                uintptr_t existing_addr;
 
                 while (retry_cnt++ < MAX_GET_BUFFER_RETRY_CNT) {
                     addr = TryGetBuffer();
@@ -167,19 +151,22 @@ public:
                     goto alloc_failed;
                 }
 
-                Put(array_id, volume_id, cur_key_blk_addr, addr, 
+                existing_addr = Put(array_id, volume_id, cur_key_blk_addr, addr, 
                         blk_addr_offset, count);
-
-                for (uint32_t i = blk_addr_offset; i < blk_addr_offset + count; 
+                if (existing_addr) {
+                    ReturnBuffer(addr);
+                    addr = existing_addr;
+                }
+                
+                for (uint32_t i = blk_addr_offset; 
+                        i < blk_addr_offset + count; 
                         i++) {
                     addr_p_vec.insert(addr_p_vec.begin() + vec_idx++, 
                             std::make_pair(addr + (i * BLOCK_SIZE), true));
                 }
 
                 blk_addr_p_vec.push_back(
-                        std::make_pair(cur_key_blk_addr, true));
-
-                key_blk_addr_in_progress = cur_key_blk_addr;
+                        std::make_pair(cur_key_blk_addr, false));
 
 alloc_failed:
                 rc_debug("miss: blk_addr=%lu, block_count=(%u, %u, %u)\n",
@@ -199,8 +186,7 @@ out:
 
     uint32_t Scan(int array_id, uint32_t volume_id, BlkAddr _blk_addr, 
             uint32_t block_count, std::vector<std::pair<uintptr_t, bool>> &addrs, 
-            std::vector<std::pair<BlkAddr, bool>> &blk_addr_p_vec, 
-            bool is_read = false) {
+            std::vector<std::pair<BlkAddr, bool>> &blk_addr_p_vec) {
         BlkAddr blk_addr = _blk_addr;
         BlkAddr end_blk_addr = _blk_addr + block_count - 1;
         uint32_t num_remain_blocks = block_count;
@@ -219,7 +205,7 @@ out:
             RequestExtent request_extent(blk_addr, count);
 
             /* write-through: should be succeeded for data consistency */
-            cache_->Get(key, value, request_extent, inv_blk_addr, is_read);
+            cache_->Get(key, value, request_extent, inv_blk_addr, true);
             
             if (value) {
                 Extent *extent = ((Extent *) value);

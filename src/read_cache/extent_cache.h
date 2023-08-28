@@ -50,31 +50,17 @@ public:
             list_del(&extent->list);
         }
         
-        /* move to mostly_used_list */
-        void Demote(Extent *extent) {
-            Delete(extent);
-            list_add_tail(&extent->list, &mostly_used_list_);
-        }
-        
-        void _Evict(ValueType &evicted_value, struct list_head *list_head) {
+        void Evict(ValueType &evicted_value) {
             Extent *extent;
 
-            list_for_each_entry(extent, list_head, list) {
+            list_for_each_entry(extent, &list_, list) {
                 if (extent->memcpy_in_progress.load())
                     continue;
 
                 evicted_value = extent;
                 list_del(&extent->list);
                 return;
-            }       
-        }
-
-        void Evict(ValueType &evicted_value) {
-            if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
-                _Evict(evicted_value, &list_);
-            } else {
-                assert(0);
-            } 
+            }
         }
          
         void Print() {
@@ -123,12 +109,44 @@ public:
         delete[] hheads_;
         delete value_list_;
     }
-    
-    void Put(const KeyType &key, const ValueType &value) override {
+
+    uintptr_t _Get(const KeyType &key) {
+        Bucket *cur_bucket;
+        size_t hash = H(key); 
+        uint32_t bkt_id = hash % num_buckets_;
+        uintptr_t ret_addr = 0;
+
+        hlist_for_each_entry(cur_bucket, &hheads_[bkt_id], hnode) {
+            if (cur_bucket->hash == hash && 
+                    ((Extent *) cur_bucket->value)->key == key) {
+                Extent *extent = (Extent *) cur_bucket->value;
+
+                if (extent->memcpy_in_progress.load()) {
+                    ret_addr = (uintptr_t) -1;
+                    break;
+                }
+
+                ret_addr = (uintptr_t) extent->addr;
+                if (policy_ == kFIFOFastEvictionPolicy) {
+                    extent->bitmap->ResetBitmap();
+                }
+                break;
+            }
+        }
+        return ret_addr;
+    }
+
+    uintptr_t Put(const KeyType &key, const ValueType &value) override {
+        uintptr_t ret_addr = _Get(key);
+        if (ret_addr) {
+            return ret_addr;
+            //assert(0); 
+        }
+
         size_t hash = H(key);
         uint32_t bkt_id = hash % num_buckets_;
-        Bucket *new_bucket = new Bucket(hash, value);
         
+        Bucket *new_bucket = new Bucket(hash, value);
         /* add to hashtable */
         hlist_add_head(&new_bucket->hnode, &hheads_[bkt_id]);
         
@@ -137,36 +155,8 @@ public:
         
         value_list_->Insert((Extent *) value); 
         ((Extent *) value)->memcpy_in_progress.store(true);
-    }
 
-    bool _Get(const KeyType &key, ValueType &value) {
-        Bucket *cur_bucket;
-        size_t hash = H(key); 
-        uint32_t bkt_id = hash % num_buckets_;
-        bool succ = false;
-        
-        hlist_for_each_entry(cur_bucket, &hheads_[bkt_id], hnode) {
-            if (cur_bucket->hash == hash && 
-                    ((Extent *) cur_bucket->value)->key == key) {
-                value = cur_bucket->value;
-                if (policy_ == kFIFOFastEvictionPolicy) {
-                    ((Extent *) value)->bitmap->ResetBitmap();
-                }
-                succ = true;
-                break;
-            }
-        }
-        return succ;
-    }
-
-    bool Contain(const KeyType &key) override {
-        ValueType v = nullptr;
-
-        if (!_Get(key, v))
-            return false;
-        
-        assert(v != nullptr);
-        return true;
+        return ret_addr;
     }
 
     void ClearInProgress(const KeyType &key, int in_progress_type) override {
@@ -199,7 +189,12 @@ public:
             if (cur_bucket->hash == hash && 
                     ((Extent *) cur_bucket->value)->key == key) {
                 Extent *extent = ((Extent *) cur_bucket->value);
-                
+
+                if (extent->memcpy_in_progress.load()) {
+                    ret = -1;
+                    break;
+                }
+
                 value = cur_bucket->value;
                 extent->memcpy_in_progress.store(true);
                 ret = 1;
@@ -219,7 +214,7 @@ public:
         return ret;
     }
     
-    /* we delete the extent after memcpy if meets invalidation condition */
+    /* XXX: we delete the extent after memcpy if meets invalidation condition */
     int Delete(const KeyType &key, ValueType &value) override {
         Bucket *cur_bucket;
         struct hlist_node *tmp;
@@ -259,6 +254,7 @@ public:
                     ((Extent *) cur_bucket->value)->key == key) {
                 hlist_del(&cur_bucket->hnode);
                 
+                assert(((Extent *) cur_bucket->value)->memcpy_in_progress == 0);
                 // size_--;
                 ret = 1;
                 delete cur_bucket;
@@ -271,7 +267,6 @@ public:
         return ret;
     }  
 
-    /* FIXME: currently use FIFO eviction */
     void Evict(ValueType &evicted_value) override {
         value_list_->Evict(evicted_value);
         if (!evicted_value)

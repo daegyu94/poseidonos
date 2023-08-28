@@ -248,7 +248,7 @@ bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
         read_br_airlog("LAT_MergedBlocksRead", "begin", volume_id, blk_addr);
         
         uint32_t num_found = read_cache->Scan(array_id, volume_id, blk_addr, 
-                blockCount, addr_p_vec, blk_addr_p_vec, true);
+                blockCount, addr_p_vec, blk_addr_p_vec);
         
         assert(blockCount >= num_found);
 

@@ -46,26 +46,18 @@ public:
     
     /* blk_rba must be extent aligned, except for update extent meta */
 
-    void Put(const KeyType &key, const ValueType &value) {
+    uintptr_t Put(const KeyType &key, const ValueType &value) {
         int id = GetShardId(key.blk_rba);
-        
-        pthread_rwlock_wrlock(&locks_[id]);
-        caches_[id]->Put(key, value);
-        pthread_rwlock_unlock(&locks_[id]);
-    }
+        uintptr_t ret_addr;
 
-    bool Contain(const KeyType &key) {
-        int id = GetShardId(key.blk_rba);
-         
-        if (policy_ == kFIFOPolicy) {
-            pthread_rwlock_rdlock(&locks_[id]);
-        } else {
-            pthread_rwlock_wrlock(&locks_[id]);
-        }
-        bool ret = caches_[id]->Contain(key);
+retry_cache_op: 
+        pthread_rwlock_wrlock(&locks_[id]);
+        ret_addr = caches_[id]->Put(key, value);
         pthread_rwlock_unlock(&locks_[id]);
-        
-        return ret;
+        if (ret_addr == ((uintptr_t) -1))
+            goto retry_cache_op;
+
+        return ret_addr;
     }
 
     void ClearInProgress(const KeyType &key, int in_progress_type) {
@@ -84,17 +76,13 @@ public:
         int retry_cnt = 0;
         int ret;
 
-    retry_cache_op: 
+retry_cache_op: 
         if (is_read && (retry_cnt++ == MAX_GET_RETRY_CNT)) {
                 ret = 0;
                 goto out;
         }
 
-        if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
-            pthread_rwlock_rdlock(&locks_[id]);
-        } else {
-            pthread_rwlock_wrlock(&locks_[id]);
-        }
+        pthread_rwlock_rdlock(&locks_[id]);
         ret = caches_[id]->Get(key, value, request_extent, inv_blk_addr);
         pthread_rwlock_unlock(&locks_[id]);
         if (ret < 0) {

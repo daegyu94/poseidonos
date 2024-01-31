@@ -85,5 +85,7 @@ void ReadCache::Initialize() {
             "num_shards=%d\n", 
             policyStr.c_str(), 
             cache_size_mb, max_num_buffers_, extent_size, num_shards);
+
+    readcache_stat_spawn_monitor();
 }
 } // namespace pos

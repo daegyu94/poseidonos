@@ -5,6 +5,7 @@
 #include "src/resource_manager/buffer_pool.h"
 #include "src/resource_manager/memory_manager.h"
 #include "src/read_cache/fixed_sized_cache.h"
+#include "src/read_cache/stat.h"
 
 #include <air/Air.h>
 

@@ -243,7 +243,6 @@ private:
     std::map<std::string, int> cachePolicyMap_ = {
         {"FIFOPolicy", kFIFOPolicy},
         {"FIFOFastEvictionPolicy", kFIFOFastEvictionPolicy},
-        {"DemotionPolicy", kDemotionPolicy}
     };
 
     std::map<std::string, int> testTypeMap_ = {

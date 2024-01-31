@@ -26,10 +26,6 @@ public:
                     caches_[i] = new ExtentCache(max_size_ / num_shards_, 
                             kFIFOFastEvictionPolicy);
                     break;
-                case kDemotionPolicy:
-                    caches_[i] = new ExtentCache(max_size_ / num_shards_, 
-                            kDemotionPolicy);
-                    break;
                 default:
                     throw std::runtime_error("wrong cache policy" + 
                             std::to_string(policy_));
@@ -55,9 +51,6 @@ public:
         int id = GetShardId(key.blk_rba);
         
         pthread_rwlock_wrlock(&locks_[id]);
-        if (policy_ == kDemotionPolicy) {
-            ((Extent *) value)->timestamp = timestamps_[id]++;
-        }
         caches_[id]->Put(key, value);
         pthread_rwlock_unlock(&locks_[id]);
     }

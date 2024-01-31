@@ -73,29 +73,7 @@ public:
         void Evict(ValueType &evicted_value) {
             if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
                 _Evict(evicted_value, &list_);
-            } else if (policy_ == kDemotionPolicy) {
-                Extent *ext1 = (Extent *) list_entry(list_.next, Extent, list);
-                Extent *ext2 = (Extent *) list_entry(mostly_used_list_.next, Extent, list);
-                
-                /* no entry in the mostly_used_list */
-                if (!ext2) {
-                    _Evict(evicted_value, &list_);
-                    return;
-                }
-                
-                /* To prevent partial or unused extents from remaining in the list */
-                bool is_list_old = ext1->timestamp < ext2->timestamp;
-                if (is_list_old) {
-                    int res = request_cnt_++ % 4; /* 1:3 ratio */
-                    if (res == 0) {
-                        _Evict(evicted_value, &list_);
-                    } else {
-                        _Evict(evicted_value, &mostly_used_list_);
-                    }
-                } else {
-                    _Evict(evicted_value, &mostly_used_list_);
-                }
-            }
+            } 
         }
          
         void Print() {
@@ -231,8 +209,7 @@ public:
 
                 value = cur_bucket->value;
                 
-                if (policy_ == kFIFOFastEvictionPolicy || 
-                        policy_ == kDemotionPolicy) {
+                if (policy_ == kFIFOFastEvictionPolicy) {
                     unsigned offset = extent_offset(request_extent.blk_addr);
                     for (unsigned i = 0; i < request_extent.len; i++) {
                         //if (!extent->bitmap->IsSetBit(offset + i)) {
@@ -247,20 +224,6 @@ public:
                     if (util > 80 || (util && util < 20)) {
                     //if (num_bits_set == blocks_per_extent)
                         inv_blk_addr = key.blk_rba;
-                    }
-
-                    if (policy_ == kDemotionPolicy) {
-                        if (util >= 90) {
-                            value_list_->Demote(extent);
-
-                            //printf("Demote: blk_addr=%lu, num_bits_set=%lu , 
-                            //      "util=%d\n",
-                            //        key.blk_rba, num_bits_set, util);
-
-                            /* no need to clear bitmaps due to FIFO */
-                            //extent->bitmap->ClearBits(0, blocks_per_extent);
-                        }
-                        assert(util <= 100);
                     }
                 }
 

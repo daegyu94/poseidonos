@@ -72,16 +72,19 @@ ibofos_bringup(){
     if [ "$CLEAN_BRINGUP" -eq 1 ]; then
         echo "poseidonos clean bringup"
         sudo $ROOT_DIR/bin/poseidonos-cli devel resetmbr
+        
+        echo "poseidonos create array"
         if [ ${PMEM_ENABLED} -eq 1 ]; then
             sudo $ROOT_DIR/bin/poseidonos-cli array create -b pmem0 $USER_DEVICE_LIST $SPARE_DEVICE_LIST --array-name $ARRAYNAME --raid RAID5
         else
             sudo $ROOT_DIR/bin/poseidonos-cli array create -b uram0 $USER_DEVICE_LIST $SPARE_DEVICE_LIST --array-name $ARRAYNAME --raid RAID5
         fi
+        echo "poseidonos mount array"
         sudo $ROOT_DIR/bin/poseidonos-cli array mount --array-name $ARRAYNAME
-
+      
+        echo "poseidonos create and mount volume"
         for i in `seq 1 $VOLUME_COUNT`
         do
-
             sudo $ROOT_DIR/bin/poseidonos-cli volume create --volume-name vol$i --size $VOLUME_SIZE --maxiops 0 --maxbw 0 --array-name  $ARRAYNAME
             sudo $ROOT_DIR/bin/poseidonos-cli volume mount --volume-name vol$i --array-name  $ARRAYNAME
         done

@@ -3,12 +3,6 @@
 ROOT_DIR=$(readlink -f $(dirname $0))/../
 binary_name=poseidonos
 
-setup_environment()
-{
-    ${ROOT_DIR}/script/setup_env.sh
-    rm -rf /dev/shm/ibof_nvmf_trace*
-}
-
 execute_ibofos()
 {
     if [ -f ${ROOT_DIR}/bin/$binary_name ];
@@ -54,7 +48,6 @@ if [[ ! -z "$1" ]];then
     binary_name=$1
 fi
 
-setup_environment
 execute_ibofos
 wait_started
 

@@ -15,6 +15,9 @@ const char* readcache_stat_names[MAX_READCACHE_STAT] = {
     "RC_ADMIT_LOCKED_FAILED",
     "RC_ADMIT_UNALLOC_FAILED",
 
+    "RC_HIT",
+    "RC_MISS",
+
     "RC_SINGLE_HIT",
     "RC_SINGLE_MISS",
 
@@ -27,8 +30,8 @@ const char* readcache_stat_names[MAX_READCACHE_STAT] = {
     "RC_EVICT_FAILED",
 };
 
-static int interval_sec = 5;
-static bool overwrite_per_iter = false;
+static int interval_sec = 3;
+static bool overwrite_per_iter = true;
 static const char *logfile_name = "/var/log/pos/readcache.log";
 
 void readcache_log_stat(void) {
@@ -60,9 +63,17 @@ void readcache_log_stat(void) {
             logfile << std::setw(25) << readcache_stat_names[i] << "=" << readcache_stat.cnts[i] << std::endl;
         }
 
+        if (readcache_stat.cnts[RC_HIT]) {
+            uint64_t hit_cnt = readcache_stat.cnts[RC_HIT];
+            uint64_t miss_cnt = readcache_stat.cnts[RC_MISS];
+            double hit_ratio = (1.0 * hit_cnt) / (hit_cnt + miss_cnt);
+            logfile << std::setw(25) << "Hit ratio=" << hit_ratio << std::endl;
+
+        }
+
         logfile << std::endl;
         
-        if (overwrite_per_iter == false) { 
+        if (overwrite_per_iter == true) { 
             logfile.close();
         }
     }

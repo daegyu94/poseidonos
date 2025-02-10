@@ -129,6 +129,7 @@ bool ReadSubmission::_IsSingleBlockCached(void) {
             }
 
             airlog("CNT_ReadCacheRead", "hit_single", volume_id, 1);
+            readcache_stat_inc(RC_HIT, 1);
 
             /* copy from  _PrepareSingleBlock() */
             StripeAddr lsidEntry;
@@ -148,6 +149,7 @@ bool ReadSubmission::_IsSingleBlockCached(void) {
             volumeIo = nullptr;
         } else {
             airlog("CNT_ReadCacheRead", "miss_single", volume_id, 1);
+            readcache_stat_inc(RC_MISS, 1);
         }
         read_br_airlog("LAT_SingleBlockRead", "end", volume_id, blk_addr);
         
@@ -288,6 +290,8 @@ bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
             }
             
             airlog("CNT_ReadCacheRead", "hit_merged", volume_id, blockCount);
+            readcache_stat_inc(RC_HIT, blockCount);
+            
             /* ReadCompletion will destroy spVolumeIo */
             spVolumeIo->GetCallback()->Execute();
 
@@ -313,6 +317,7 @@ bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
                         blockCount - num_found);
             }
             airlog("CNT_ReadCacheRead", "miss_merged", volume_id, blockCount);
+            readcache_stat_inc(RC_MISS, blockCount);
         }
 
         read_br_airlog("LAT_MergedBlocksRead", "end", volume_id, blk_addr);

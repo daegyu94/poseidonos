@@ -8,7 +8,10 @@ enum readcache_stat_name_t {
     RC_ADMIT_CONTAINED_SUCC,
     RC_ADMIT_LOCKED_FAILED,
     RC_ADMIT_UNALLOC_FAILED,
-    
+ 
+    RC_HIT,
+    RC_MISS,
+   
     RC_SINGLE_HIT,
     RC_SINGLE_MISS,
 
@@ -30,7 +33,7 @@ struct readcache_stat {
 extern struct readcache_stat readcache_stat;
 extern const char *readcache_stat_names[];
 
-static inline void readcache_stat_inc(int stat_name, int tid, int cnt = 1)
+static inline void readcache_stat_inc(int stat_name, int cnt = 1)
 {
     readcache_stat.cnts[stat_name] += cnt;
 }

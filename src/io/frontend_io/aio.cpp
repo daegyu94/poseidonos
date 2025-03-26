@@ -64,6 +64,8 @@
 #include "src/volume/volume_manager.h"
 #include "src/volume/volume_service.h"
 
+#include "src/read_cache/stat.h"
+
 namespace pos
 {
 IOCtx::IOCtx(void)
@@ -211,12 +213,15 @@ AIO::_CreateVolumeIo(pos_io& posIo)
             if (*(posIo.arrayName) == '7' && 
                     *(posIo.arrayName + 1) == '7') { 
                 volumeIo->SetPrefetchIo(true);
+            } else {
+                readcache_stat.read_cnt++;
             }
             break;
         }
         case IO_TYPE::WRITE:
         {
             volumeIo->dir = UbioDir::Write;
+            readcache_stat.write_cnt++;
             break;
         }
         default:

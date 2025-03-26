@@ -35,7 +35,9 @@
 #include "src/dpdk_wrapper/hugepage_allocator.h"
 #include "src/include/pos_event_id.hpp"
 #include "src/logger/logger.h"
+
 #include <cassert>
+#include <fstream>
 
 using namespace pos;
 using namespace std;
@@ -160,6 +162,30 @@ BufferPool::ReturnBuffers(std::vector<void*>* buffers)
     }
 }
 
+#if 0
+#include <fstream>
+uint64_t GetHugePageSize() {
+    std::ifstream meminfo("/proc/meminfo");
+    std::string line;
+    uint64_t hugepageSize = 0;
+
+    // /proc/meminfo에서 Hugepagesize 찾기
+    while (std::getline(meminfo, line)) {
+        if (line.find("Hugepagesize") != std::string::npos) {
+            // "Hugepagesize: 2048 kB" 형태로 나오므로 이를 파싱
+            size_t pos = line.find(":");
+            if (pos != std::string::npos) {
+                hugepageSize = std::stoull(line.substr(pos + 1));
+            }
+            break;
+        }
+    }
+
+    // kB 단위로 제공되므로, 이를 바이트로 변환
+    return hugepageSize * 1024;  // kB -> Byte
+}
+#endif 
+
 bool
 BufferPool::_Init(void)
 {
@@ -171,11 +197,11 @@ BufferPool::_Init(void)
     uint8_t* buffer = 0;
     // 2MB allocation for avoiding buddy allocation overhead
     uint64_t allocSize = hugepageAllocator->GetDefaultPageSize();
+    //uint64_t allocSize = GetHugePageSize();
     uint32_t allocCount = 1;
-    
+
     if (BUFFER_INFO.owner.compare("ReadCache") == 0) {
-        allocSize = (1 << 30); // XXX: 1024 MB unit, can be smaller unit
-        printf("ReadCache: allocSize(MB)=%lu\n", allocSize / (1 << 20));
+        printf("%s: ReadCache, allocSize=%lu, BUFFER_INFO.size=%lu\n", __func__, allocSize, BUFFER_INFO.size);
     }
 
     if (allocSize < BUFFER_INFO.size)

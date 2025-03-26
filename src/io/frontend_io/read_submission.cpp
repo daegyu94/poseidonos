@@ -45,13 +45,22 @@
 #include "src/dump/dump_module.hpp"
 #include "src/event_scheduler/callback.h"
 #include "src/include/pos_event_id.hpp"
+
 #include "src/read_cache/read_cache.h"
+#include "src/read_cache/stat.h"
 
 //#define READCACHE_READ_BREAKDOWN
 #ifdef READCACHE_READ_BREAKDOWN
 #define read_br_airlog(n, f, i, k) airlog(n, f, i, k)
 #else
 #define read_br_airlog(n, f, i, k) do {} while (0)
+#endif
+
+//#define READ_SUBMISSION_DEBUG
+#ifdef READ_SUBMISSION_DEBUG
+#define read_sub_debug(str, ...) printf("%s: " str, __func__, __VA_ARGS__)
+#else 
+#define read_sub_debug(str, ...) do {} while (0)  
 #endif
 
 namespace pos
@@ -97,9 +106,9 @@ ReadSubmission::~ReadSubmission()
     }
 }
 
-bool ReadSubmission::_IsSingleBlockCached(void) {
+int ReadSubmission::_IsSingleBlockCached(void) {
     auto read_cache = ReadCacheSingleton::Instance();
-    bool ret = 0;
+    int ret = 0;
 
     if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache() &&
             !volumeIo->IsPrefetchIo()) {
@@ -113,7 +122,7 @@ bool ReadSubmission::_IsSingleBlockCached(void) {
         
         ret = read_cache->Get(array_id, volume_id, blk_addr_p, addr);
 
-        if (ret) {
+        if (ret > 0) {
             void *src = (void *) (addr + blockAlignment->GetHeadPosition());
             void *dst = volumeIo->GetBuffer();
             size_t size = volumeIo->GetSize();
@@ -169,7 +178,7 @@ ReadSubmission::Execute(void)
     bool isInSingleBlock = (blockAlignment->GetBlockCount() == 1);
     if (isInSingleBlock)
     {
-        if (_IsSingleBlockCached())
+        if (_IsSingleBlockCached() > 0)
             return true;
         
         _PrepareSingleBlock();
@@ -246,11 +255,17 @@ bool ReadSubmission::_IsMergedBlockCached(uint32_t volumeIoIndex) {
         int array_id = volumeIo->GetArrayId();
         uint32_t volume_id = volumeIo->GetVolumeId();
         
+        blk_addr_p_vec.reserve(blockCount);
+        
         read_br_airlog("LAT_MergedBlocksRead", "begin", volume_id, blk_addr);
         
         uint32_t num_found = read_cache->Scan(array_id, volume_id, blk_addr, 
                 blockCount, addrs, blk_addr_p_vec, true);
         
+        read_sub_debug("rba=%lu, blk_addr=%lu, blockCount=%u, num_found=%d, %s\n",
+                ChangeBlockToByte(blk_addr), blk_addr, blockCount, num_found, 
+                blockCount == num_found ? "true" : "false");
+
         assert(blockCount >= num_found);
 
         /* TODO: split again when only some blocks are cached */

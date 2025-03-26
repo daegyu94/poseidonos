@@ -12,7 +12,7 @@ public:
     virtual void ClearInProgress(const KeyType&, int) { return; }
 
     virtual int Get(const KeyType&, ValueType &, const RequestExtent &,
-            uintptr_t &) = 0;
+            uintptr_t &, bool) = 0;
     virtual int Delete(const KeyType&, ValueType &) = 0;
     virtual void Evict(ValueType &) = 0;
     

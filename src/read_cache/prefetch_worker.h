@@ -22,9 +22,8 @@ public:
                     if (tasks_.try_pop(task)) {
                         task();
                     } else {
-                        /* XXX: how long should sleep? */
                         std::this_thread::sleep_for(
-                                std::chrono::microseconds(5));
+                                std::chrono::microseconds(1));
                     }
                 }
             });
@@ -33,13 +32,13 @@ public:
             // only CPU i as set.
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
-            CPU_SET(29, &cpuset); // XXX
+            CPU_SET(39, &cpuset); // XXX
             int rc = pthread_setaffinity_np(threads_[i].native_handle(),
                     sizeof(cpu_set_t), &cpuset);
             if (rc != 0) {
                 std::cerr << "Error calling pthread_setaffinity_np: " << rc << "\n";
             } else {
-                printf("%s: tid=%d is pinnned at CPU 29\n", __func__, i); 
+                printf("%s: tid=%d is pinnned at CPU 39\n", __func__, i); 
             }
         }
     }

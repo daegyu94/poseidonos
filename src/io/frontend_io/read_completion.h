@@ -49,6 +49,7 @@ public:
     ~ReadCompletion(void) override;
 
 private:
+    void _AdmitCache();
     bool _DoSpecificJob(void) override;
 
     VolumeIoSmartPtr volumeIo;

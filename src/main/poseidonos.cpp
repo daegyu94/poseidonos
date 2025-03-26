@@ -171,7 +171,8 @@ Poseidonos::Terminate(void)
 
     IoTimeoutCheckerSingleton::ResetInstance();
 #if 1
-    if (ReadCacheSingleton::Instance()->IsEnabled()) {
+    if (ReadCacheSingleton::Instance()->IsEnabled() && 
+            ReadCacheSingleton::Instance()->IsPrefetchAdmission()) {
         PrefetchWorkerSingleton::Instance()->SetTerminate(true);
         PrefetchWorkerSingleton::ResetInstance();
     }
@@ -336,7 +337,8 @@ Poseidonos::_SetupThreadModel(void)
 #if 1
     int num_prefetcher = 1; /* consume received prefetch request */
     ReadCacheSingleton::Instance()->Initialize();
-    if (ReadCacheSingleton::Instance()->IsEnabled()) {
+    if (ReadCacheSingleton::Instance()->IsEnabled() &&
+            ReadCacheSingleton::Instance()->IsPrefetchAdmission()) {
         std::string port = "50051";
         std::string svrAddr = "0.0.0.0:" + port;
         PrefetchWorkerSingleton::Instance()->Initialize(num_prefetcher, svrAddr);

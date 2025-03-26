@@ -12,7 +12,7 @@ DEFAULT_CLEAN_BRINGUP=1
 DEFAULT_TRANSPORT=TCP
 DEFAULT_TARGET_IP=127.0.0.1  # CI Server VM IP
 DEFAULT_SUBSYSTEM_COUNT=1
-DEFAULT_WRITE_BUFFER_SIZE_IN_MB=3072
+DEFAULT_WRITE_BUFFER_SIZE_IN_MB=4096
 DEFAULT_NUM_SHARED_BUFFER=4096
 DEFAULT_VOLUME_COUNT=1
 DEFAULT_VOLUME_SIZE=2147483648B
@@ -23,6 +23,7 @@ PMEM_ENABLED=0
 ARRAYNAME=POSArray
 CLI=${ROOT_DIR}/bin/poseidonos-cli
 URAM_BLOCK_SIZE=512
+RAID_TYPE="RAID0" # RAID0, RAID5
 ############## ^^^ USER CONFIGURABLES ^^^ #################
 
 RED_COLOR="\033[1;31m"
@@ -75,9 +76,9 @@ ibofos_bringup(){
         
         echo "poseidonos create array"
         if [ ${PMEM_ENABLED} -eq 1 ]; then
-            sudo $ROOT_DIR/bin/poseidonos-cli array create -b pmem0 $USER_DEVICE_LIST $SPARE_DEVICE_LIST --array-name $ARRAYNAME --raid RAID5
+            sudo $ROOT_DIR/bin/poseidonos-cli array create -b pmem0 $USER_DEVICE_LIST $SPARE_DEVICE_LIST --array-name $ARRAYNAME --raid $RAID_TYPE
         else
-            sudo $ROOT_DIR/bin/poseidonos-cli array create -b uram0 $USER_DEVICE_LIST $SPARE_DEVICE_LIST --array-name $ARRAYNAME --raid RAID5
+            sudo $ROOT_DIR/bin/poseidonos-cli array create -b uram0 $USER_DEVICE_LIST $SPARE_DEVICE_LIST --array-name $ARRAYNAME --raid $RAID_TYPE
         fi
         echo "poseidonos mount array"
         sudo $ROOT_DIR/bin/poseidonos-cli array mount --array-name $ARRAYNAME

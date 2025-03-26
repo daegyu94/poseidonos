@@ -4,6 +4,7 @@
 
 #include "i_cache_policy.h"
 #include "extent.h"
+#include "src/logger/logger.h"
 
 namespace pos {
 class ExtentCache : public ICachePolicy {
@@ -71,9 +72,9 @@ public:
         }
 
         void Evict(ValueType &evicted_value) {
-            if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
+            //if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
                 _Evict(evicted_value, &list_);
-            } 
+            //} 
         }
          
         void Print() {
@@ -113,9 +114,13 @@ public:
         }
         
         value_list_ = new ValueList(policy_);
-
-        printf("%s: num_buckets=%u, size(KB)=%lu\n", 
-                __func__, num_buckets_, sizeof(Bucket) * num_buckets_ / 1024);   
+            
+        static bool initialized = false;
+        if (initialized) {
+            printf("[INFO] %s: num_buckets=%u, size(KB)=%lu\n", 
+                    __func__, num_buckets_, sizeof(Bucket) * num_buckets_ / 1024); 
+            initialized = true;
+        }
     }
 
     ~ExtentCache() {
@@ -147,13 +152,20 @@ public:
             if (cur_bucket->hash == hash && 
                     ((Extent *) cur_bucket->value)->key == key) {
                 value = cur_bucket->value;
+                Extent *extent = ((Extent *) value);
+
                 if (policy_ == kFIFOFastEvictionPolicy) {
-                    ((Extent *) value)->bitmap->ResetBitmap();
+                    extent->bitmap->ResetBitmap();
+                } else if (policy_ == kLRUPolicy) {
+                    value_list_->Delete(extent);
+                    value_list_->Insert(extent);
                 }
                 succ = true;
                 break;
             }
         }
+        //printf("extent_cache:%s, key(%d, %u, %lu), succ=%d\n", __func__, 
+        //        key.array_id, key.volume_id, key.blk_rba, succ);
         return succ;
     }
 
@@ -191,7 +203,7 @@ public:
     
     int Get(const KeyType &key, ValueType &value, 
             const RequestExtent &request_extent, 
-            uintptr_t &inv_blk_addr) override {
+            uintptr_t &inv_blk_addr, bool is_read) override {
         Bucket *cur_bucket;
         size_t hash = H(key);
         uint32_t bkt_id = hash % num_buckets_;
@@ -203,10 +215,25 @@ public:
                 Extent *extent = ((Extent *) cur_bucket->value);
                 int prefetch_in_progress = extent->prefetch_in_progress.load();
                 if (prefetch_in_progress) {
-                    ret = -prefetch_in_progress;
+                    ret = -1; // ret = -prefetch_in_progress;
+#ifdef DELAYED_UPDATE
+                    if (is_read) {
+                        if (extent->need_inv.load()) {
+                            ret = -2;
+                        }
+                    } else {
+                        extent->need_inv.store(true);
+                    }
+#endif
                     break;
                 }
-
+                
+#ifdef DELAYED_UPDATE
+                if (is_read && extent->need_inv.load()) {
+                    ret = -2;
+                    break;
+                }
+#endif
                 value = cur_bucket->value;
                 
                 if (policy_ == kFIFOFastEvictionPolicy) {
@@ -219,18 +246,25 @@ public:
 
                     uint64_t num_bits_set = extent->bitmap->GetNumBitsSet(); 
                     int util = 100 * num_bits_set / blocks_per_extent;
-                    
+ 
                     /* prevent waste (amplification) */
                     if (util > 80 || (util && util < 20)) {
                     //if (num_bits_set == blocks_per_extent)
                         inv_blk_addr = key.blk_rba;
                     }
+                } else if (policy_ == kLRUPolicy) {
+                    /* move cur bucket to mru position */
+                    value_list_->Delete(extent);
+                    value_list_->Insert(extent);
                 }
 
                 extent->memcpy_in_progress.store(true);
                 ret = 1;
                 break;
             }
+            //printf("bucket_hash=%lu, hash=%lu, bucket_key=%lu, key=%lu\n", 
+            //        cur_bucket->hash, hash, 
+            //        (((Extent *) cur_bucket->value)->key).blk_rba, key.blk_rba);
         }
         return ret;
     }

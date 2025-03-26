@@ -26,6 +26,10 @@ public:
                     caches_[i] = new ExtentCache(max_size_ / num_shards_, 
                             kFIFOFastEvictionPolicy);
                     break;
+                case kLRUPolicy:
+                    caches_[i] = new ExtentCache(max_size_ / num_shards_, 
+                            kLRUPolicy);
+                    break;
                 default:
                     throw std::runtime_error("wrong cache policy" + 
                             std::to_string(policy_));
@@ -61,6 +65,10 @@ public:
         if (policy_ == kFIFOPolicy) {
             pthread_rwlock_rdlock(&locks_[id]);
         } else {
+            /* 
+             * kFIFOFastEvictionPolicy resets bitmap 
+             * kLRUPolicy move to MRU 
+             */
             pthread_rwlock_wrlock(&locks_[id]);
         }
         bool ret = caches_[id]->Contain(key);
@@ -84,28 +92,29 @@ public:
         int id = GetShardId(key.blk_rba);
         constexpr int max_retry_cnt = 3;
         int retry_cnt = 0;
-        int ret;
+        int ret = 0;
 
     retry_cache_op: 
         if (is_read && (retry_cnt++ == max_retry_cnt)) {
-                ret = 0;
-                goto out;
-        }
+            goto out;
+        } 
 
         if (policy_ == kFIFOPolicy || policy_ == kFIFOFastEvictionPolicy) {
             pthread_rwlock_rdlock(&locks_[id]);
         } else {
             pthread_rwlock_wrlock(&locks_[id]);
         }
-        ret = caches_[id]->Get(key, value, request_extent, inv_blk_addr);
+        ret = caches_[id]->Get(key, value, request_extent, inv_blk_addr, is_read);
         pthread_rwlock_unlock(&locks_[id]);
-        if (ret < 0) {
+        if (ret == -1) {
             goto retry_cache_op;
         }
-
-    out:
-        assert(ret >= 0);
-
+#ifdef DELAYED_UPDATE
+        else if (is_read == false) {
+            goto out;
+        }
+#endif
+out:
         return ret;
     }
 

@@ -3,11 +3,15 @@
 #include "src/lib/singleton.h"
 #include "src/include/address_type.h"
 #include "src/resource_manager/buffer_pool.h"
+#include "src/read_cache/extent_pool.h"
 #include "src/resource_manager/memory_manager.h"
 #include "src/read_cache/fixed_sized_cache.h"
-#include "src/read_cache/stat.h"
 
 #include <air/Air.h>
+
+#include "stat.h"
+
+#define CONFIG_EXTENT_POOL
 
 //#define READ_CACHE_DEBUG
 #ifdef READ_CACHE_DEBUG
@@ -24,12 +28,23 @@ enum {
     kCacheOpOnly,
 };
 
+/* XXX: calculation */
+#if 0
+constexpr int MAX_PENDING_IO = 128;
+constexpr int MAX_QD = 32;
+#else 
+constexpr int MAX_PENDING_IO = 4;
+constexpr int MAX_QD = 1;
+#endif 
+
 class ReadCache {
 public:
     ReadCache(void) { }
     ~ReadCache(void) {
         if (enabled_) {
+            delete extentPool_;
             memoryManager_->DeleteBufferPool(bufferPool_);
+
             delete cache_;
         }
     }
@@ -57,7 +72,7 @@ public:
         cache_->ClearInProgress(key, in_progress_type);
     }
     
-    bool Get(int array_id, uint32_t volume_id, 
+    int Get(int array_id, uint32_t volume_id, 
             std::pair<BlkAddr, bool> &blk_addr_p, uintptr_t &addr) {
         BlkAddr blk_addr = blk_addr_p.first;
         KeyType key(array_id, volume_id, extent_start(blk_addr));
@@ -67,9 +82,13 @@ public:
         bool is_buffer_util_high = is_buffer_util_high_;
 
         int ret = cache_->Get(key, value, request_extent, inv_blk_addr, true); 
-        if (ret > 0)
+        if (ret > 0) {
             addr = ((Extent *) value)->addr + 
                 extent_offset(blk_addr) * BLOCK_SIZE;
+        } else if (ret == -2) {
+            uintptr_t tmp_addr;
+            Delete(array_id, volume_id, blk_addr, tmp_addr);
+        }
 
         if (inv_blk_addr && is_buffer_util_high) {
             blk_addr_p.second = true;
@@ -94,7 +113,7 @@ public:
         return ret;
     }
 
-    uint32_t Scan(int array_id, uint32_t volume_id, BlkAddr _blk_addr, 
+	uint32_t Scan(int array_id, uint32_t volume_id, BlkAddr _blk_addr, 
             uint32_t block_count, std::vector<std::pair<uintptr_t, bool>> &addrs, 
             std::vector<std::pair<BlkAddr, bool>> &blk_addr_p_vec, 
             bool is_read = false) {
@@ -104,7 +123,8 @@ public:
         uint32_t num_found = 0;
         int vec_idx = 0;
         bool is_buffer_util_high = is_buffer_util_high_;
-        
+        int ret = 0;
+
         while (true) {
             uint32_t diff1 = blocks_per_extent - extent_offset(blk_addr);
             uint32_t diff2 = end_blk_addr - blk_addr + 1;
@@ -117,8 +137,13 @@ public:
             RequestExtent request_extent(blk_addr, count);
 
             /* write-through: should be succeeded for data consistency */
-            cache_->Get(key, value, request_extent, inv_blk_addr, is_read);
-            
+            ret = cache_->Get(key, value, request_extent, inv_blk_addr, is_read);
+            if (is_read && ret == -2) {
+                uintptr_t tmp_addr;
+                Delete(array_id, volume_id, blk_addr, tmp_addr);
+                goto not_found;
+            }
+
             if (value) {
                 if (inv_blk_addr && is_buffer_util_high) {
                     is_inv = true;
@@ -142,8 +167,9 @@ public:
                     }
                 }
             } else {
-                rc_debug("miss: blk_addr=%lu, block_count=(%u, %u, %u)\n",
-                        blk_addr, block_count, num_remain_blocks, count);
+not_found:
+                //rc_debug("miss: blk_addr=%lu, block_count=(%u, %u, %u)\n",
+                //        blk_addr, block_count, num_remain_blocks, count);
                 vec_idx += count;
                 num_remain_blocks -= count;
                 if (num_remain_blocks == 0) {
@@ -165,6 +191,8 @@ out:
         if (!value) {
             airlog("CNT_ReadCacheBuffer", "failed_evict", 0, 1);
             return;
+        } else {
+            readcache_stat.cache_evict++;
         }
         
         //Extent *ext = (Extent *) value;
@@ -178,29 +206,52 @@ out:
         airlog("CNT_ReadCacheBuffer", "succ_evict", 0, 1);
     }
 
+    uintptr_t TryGetTmpBuffer(void) {
+        return (uintptr_t) bufferPool_->TryGetBuffer();
+    }
+
+    void ReturnTmpBuffer(uintptr_t addr) {
+        bufferPool_->ReturnBuffer((void *) addr); 
+    }
+
     uintptr_t TryGetBuffer(void) {
+#ifdef CONFIG_EXTENT_POOL
+        uintptr_t ret = extentPool_->Allocate();
+        if (ret == (uintptr_t) -1) {
+            ret = 0;
+        }
+#else 
         uintptr_t ret = (uintptr_t) bufferPool_->TryGetBuffer();
         if (ret) {
             num_buffers_.fetch_add(1);
             airlog("CNT_ReadCacheBuffer", "pool", 0, extent_size);
         }
+#endif
         return ret;
     }
 
     void ReturnBuffer(uintptr_t addr) {
+#ifdef CONFIG_EXTENT_POOL
+        extentPool_->Free(addr);
+#else
         num_buffers_.fetch_sub(1);
         bufferPool_->ReturnBuffer((void *) addr); 
+#endif
         airlog("CNT_ReadCacheBuffer", "pool", 0, -extent_size);
     }
-
-    BufferPool *GetBufferPool(void) {
-        return bufferPool_;
-    } 
     
     bool IsEnabled(void) const {
         return enabled_;
     }
-    
+ 
+    bool IsPrefetchAdmission(void) const {
+        if (admissionPolicy_ == kPrefetchAdmission) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+   
     bool IsEnabledPrefetch(void) const {
         if (testType_ == kGrpcOnly || testType_ == kCacheOpOnly)
             return false;
@@ -213,23 +264,16 @@ out:
     }
     
     void UpdateBufferUtil(void) {
-        /* TODO: condition for fifo fast eviction */
-        //if (0) {
-        //    return;
-        //}
-
-        if (request_cnt_++ % 100) {
-            return;
-        }
-
+#ifndef CONFIG_EXTENT_POOL
         unsigned int util = (100UL * num_buffers_.load()) / max_num_buffers_;
         if (util > buffer_util_threshold_) {
             is_buffer_util_high_ = true;
         } else {
             is_buffer_util_high_ = false;
         }
+#endif
     }
-
+   
 private:
     /* 
      * TODO: read cache option 
@@ -239,10 +283,17 @@ private:
      */
     bool enabled_;
     int testType_;
-    
+    int admissionPolicy_;
+
     std::map<std::string, int> cachePolicyMap_ = {
         {"FIFOPolicy", kFIFOPolicy},
         {"FIFOFastEvictionPolicy", kFIFOFastEvictionPolicy},
+        {"LRUPolicy", kLRUPolicy},
+    };
+
+    std::map<std::string, int> admissionPolicyMap_ = {
+        {"Prefetch", kPrefetchAdmission},
+        {"Read", kReadAdmission},
     };
 
     std::map<std::string, int> testTypeMap_ = {
@@ -252,9 +303,11 @@ private:
         {"cache_op_only", kCacheOpOnly}
     };
 
+    ExtentPool *extentPool_;
     /* memory pool for cached block */
     MemoryManager *memoryManager_;
     BufferPool *bufferPool_;
+
     size_t max_num_buffers_;
     std::atomic<size_t> num_buffers_;
     unsigned int buffer_util_threshold_ = 95;

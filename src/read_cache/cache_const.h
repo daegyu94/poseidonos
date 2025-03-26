@@ -10,9 +10,15 @@ enum KeyState {
 enum cachePolicy {
     kFIFOPolicy = 0,
     kFIFOFastEvictionPolicy,
+    kLRUPolicy,
     kMaxPolicy
 };
 
+enum admissionPolicy {
+    kPrefetchAdmission = 0,
+    kReadAdmission,
+    kMaxAdmissionPolicy
+};
 enum in_progress_type {
     kPrefetchInProgress = 0,
     kMemcpyInProgress

@@ -15,11 +15,11 @@ echo 3 > /proc/sys/vm/drop_caches
 cd ../lib/spdk/scripts;
 
 nvme_devs=$(lsblk | grep nvme)
-if [ ! -z  $nvme_devs ]; then
+if [[ -z  $nvme_devs ]]; then
+  echo "[INFO] Already setup with SPDK"
+else
   echo "[INFO] PCIe to SPDK"
   sudo ./setup.sh reset
-else
-  echo "[INFO] Already setup with SPDK"
 fi
 
 DEF_HUGEPAGESIZE_KB=$(cat /proc/meminfo | grep Hugepagesize | awk '{print $2}')
@@ -43,7 +43,8 @@ echo "/etc/pos/core/%E.core" > /proc/sys/kernel/core_pattern
 
 
 #SETUP_MAX_MAP_COUNT
-MAX_MAP_COUNT=65535
+#MAX_MAP_COUNT=65535
+MAX_MAP_COUNT=$((256 * 1024)) # 2MB: 512GB
 CURRENT_MAX_MAP_COUNT=$(cat /proc/sys/vm/max_map_count)
 echo "Current maximum # of memory map areas per process is $CURRENT_MAX_MAP_COUNT."
 if [ "$CURRENT_MAX_MAP_COUNT" -lt "$MAX_MAP_COUNT" ]; then

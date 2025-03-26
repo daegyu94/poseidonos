@@ -16,7 +16,7 @@ public:
     bool Do(PrefetchMetaSmartPtr);
 
     bool FrontendIO(PrefetchMetaSmartPtr);
-    void IssueFrontendIO(PrefetchMeta *, uintptr_t, size_t);
+    void IssueFrontendIO(PrefetchMeta *, uintptr_t, size_t, int);
     
 private:
     uint64_t request_cnt_;

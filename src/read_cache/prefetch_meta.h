@@ -12,11 +12,15 @@ struct PrefetchMeta {
     int arrayId;
     uint32_t volumeId;
     uint64_t rba;
+    int core;
+    uintptr_t addr;
 
-    PrefetchMeta(int a, uint32_t n, uint64_t r) {
+    PrefetchMeta(int a, uint32_t n, uint64_t r, int core = 0, uintptr_t addr = 0) {
         arrayId = a; /* subsys_id -> arr_id */
         volumeId = n; /* volume idx starts from 0 */ 
         rba = r;
+        this->core = core;
+        this->addr = addr;
     }
 };
 using PrefetchMetaSmartPtr = std::shared_ptr<PrefetchMeta>;

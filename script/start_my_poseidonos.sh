@@ -8,7 +8,8 @@ execute_ibofos()
     if [ -f ${ROOT_DIR}/bin/$binary_name ];
     then
         echo "Execute poseidonos"
-        nohup ${ROOT_DIR}/bin/$binary_name > /dev/null 2>&1 &
+        #nohup ${ROOT_DIR}/bin/$binary_name > /dev/null 2>&1 &
+        nohup ${ROOT_DIR}/bin/$binary_name > /var/log/pos/pos_info.log 2>&1 &
     else
         echo "No executable poseidonos file"
         exit -1

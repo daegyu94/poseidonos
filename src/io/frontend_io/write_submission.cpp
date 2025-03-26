@@ -35,6 +35,7 @@
 #include <air/Air.h>
 
 #include <mutex>
+#include <future>
 
 #include "src/admin/smart_log_mgr.h"
 #include "src/allocator/i_block_allocator.h"
@@ -115,9 +116,75 @@ WriteSubmission::~WriteSubmission(void)
 {
 }
 
+#if 0
+class ThreadPool {
+public:
+    ThreadPool(size_t numThreads);
+    ~ThreadPool();
+
+    template<class F, class... Args>
+    auto Enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
+
+private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex queueMutex;
+    std::condition_variable condition;
+    bool stop;
+};
+
+ThreadPool::ThreadPool(size_t numThreads) : stop(false) {
+    for (size_t i = 0; i < numThreads; ++i) {
+        workers.emplace_back([this] {
+            while (true) {
+                std::function<void()> task;
+                {
+                    std::unique_lock<std::mutex> lock(this->queueMutex);
+                    this->condition.wait(lock, [this] { return this->stop || !this->tasks.empty(); });
+                    if (this->stop && this->tasks.empty())
+                        return;
+                    task = std::move(this->tasks.front());
+                    this->tasks.pop();
+                }
+                task();
+            }
+        });
+    }
+}
+
+ThreadPool::~ThreadPool() {
+    {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        stop = true;
+    }
+    condition.notify_all();
+    for (std::thread &worker : workers)
+        worker.join();
+}
+
+template<class F, class... Args>
+auto ThreadPool::Enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
+    using return_type = typename std::invoke_result<F, Args...>::type;
+    auto task = std::make_shared<std::packaged_task<return_type()>>(
+        std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+    );
+
+    std::future<return_type> res = task->get_future();
+    {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        if (stop)
+            throw std::runtime_error("ThreadPool is stopped");
+        tasks.emplace([task]() { (*task)(); });
+    }
+    condition.notify_one();
+    return res;
+}
+
+ThreadPool pool(8);
+#endif 
+
 void WriteSubmission::_InvalidateCache(BlkAddr blk_addr) {
     auto read_cache = ReadCacheSingleton::Instance();
-    //BlkAddr alignedblkRba = extent_start(blk_addr);
     
     /* TODO: Delete only extent aligned blkrba */
     for (uint32_t i = 0; i < blockCount; i++) {
@@ -135,60 +202,60 @@ void WriteSubmission::_InvalidateCache(BlkAddr blk_addr) {
 void WriteSubmission::_UpdateCache(BlkAddr blk_addr) {
     auto read_cache = ReadCacheSingleton::Instance();
 
-    if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache()) {
-        std::vector<std::pair<uintptr_t, bool>> addrs(blockCount, 
-                std::make_pair(0, false));
-        std::vector<std::pair<BlkAddr, bool>> blk_addr_p_vec;
-        int array_id = volumeIo->GetArrayId();
-        uint32_t volume_id = volumeIo->GetVolumeId();
+    std::vector<std::pair<uintptr_t, bool>> addrs(blockCount, 
+            std::make_pair(0, false));
+    std::vector<std::pair<BlkAddr, bool>> blk_addr_p_vec;
+    int array_id = volumeIo->GetArrayId();
+    uint32_t volume_id = volumeIo->GetVolumeId();
 
-        write_br_airlog("LAT_BlocksUpdate", "begin", volume_id, blk_addr);
+    blk_addr_p_vec.reserve(blockCount);
 
-        //uint32_t num_found = 
-        read_cache->Scan(array_id, volume_id, blk_addr, blockCount, addrs, 
-                blk_addr_p_vec);
-        
-        uintptr_t buffer_addr = (uintptr_t) volumeIo->GetBuffer();
-        for (uint32_t i = 0; i < blockCount; i++) {
-            size_t size = blockAlignment.GetDataSize(i); 
-            /* bypass memcpy if extent will be invalidated */
-            if (addrs[i].first && !addrs[i].second) {
-                void *src = (void *) buffer_addr;
-                void *dst = (void *) (addrs[i].first + 
-                        blockAlignment.GetHeadPosition());
-                
-                memcpy(dst, src, size);
-                
-                airlog("CNT_ReadCacheWrite", "succ_update", volume_id, 1);
+    write_br_airlog("LAT_BlocksUpdate", "begin", volume_id, blk_addr);
 
-                //printf("(%u, %d) buffer_addr=%lu, src=%lu, dst=%lu 
-                //      "(addr=%lu, headpos=%u), size=%lu\n", 
-                //        blockCount, i, buffer_addr, (uintptr_t) src, 
-                //        (uintptr_t) dst, addrs[i].first, 
-                //        blockAlignment.GetHeadPosition(), size);
-            }
+    //uint32_t num_found = 
+    read_cache->Scan(array_id, volume_id, blk_addr, blockCount, addrs, 
+            blk_addr_p_vec);
 
-            buffer_addr += size; // next block
-        }
-        
-        for (auto iter = blk_addr_p_vec.begin(); 
-                iter != blk_addr_p_vec.end(); 
-                iter++) {
-            BlkAddr blk_addr = iter->first;
-            bool is_inv = iter->second;
-            if (is_inv) {
-                uintptr_t addr = 0;
-                read_cache->Delete(array_id, volume_id, blk_addr, addr);
-            } else {
-                read_cache->ClearInProgress(array_id, volume_id, blk_addr, 
-                        kMemcpyInProgress);
-            }
+    uintptr_t buffer_addr = (uintptr_t) volumeIo->GetBuffer();
+    for (uint32_t i = 0; i < blockCount; i++) {
+        size_t size = blockAlignment.GetDataSize(i); 
+        /* bypass memcpy if extent will be invalidated */
+        if (addrs[i].first && !addrs[i].second) {
+            void *src = (void *) buffer_addr;
+            void *dst = (void *) (addrs[i].first + 
+                    blockAlignment.GetHeadPosition());
+
+            memcpy(dst, src, size);
+
+            airlog("CNT_ReadCacheWrite", "succ_update", volume_id, 1);
+
+            //printf("(%u, %d) buffer_addr=%lu, src=%lu, dst=%lu 
+            //      "(addr=%lu, headpos=%u), size=%lu\n", 
+            //        blockCount, i, buffer_addr, (uintptr_t) src, 
+            //        (uintptr_t) dst, addrs[i].first, 
+            //        blockAlignment.GetHeadPosition(), size);
         }
 
-        write_br_airlog("LAT_BlocksUpdate", "end", volume_id, blk_addr);
-        
-        airlog("HIST_ReadCache", "write_blk_cnt", volume_id, blockCount);
+        buffer_addr += size; // next block
     }
+
+    for (auto iter = blk_addr_p_vec.begin(); 
+            iter != blk_addr_p_vec.end(); 
+            iter++) {
+        BlkAddr blk_addr = iter->first;
+        bool is_inv = iter->second;
+        if (is_inv) {
+            uintptr_t addr = 0;
+            read_cache->Delete(array_id, volume_id, blk_addr, addr);
+        } else {
+            read_cache->ClearInProgress(array_id, volume_id, blk_addr, 
+                    kMemcpyInProgress);
+        }
+    }
+
+    write_br_airlog("LAT_BlocksUpdate", "end", volume_id, blk_addr);
+
+    airlog("HIST_ReadCache", "write_blk_cnt", volume_id, blockCount);
 }
 
 bool
@@ -217,14 +284,30 @@ WriteSubmission::Execute(void)
             }
             return false;
         }
-        
-        if (1) {
-            _UpdateCache(startRba);
-        } else {
-            _InvalidateCache(startRba);
-        }
 
+        auto read_cache = ReadCacheSingleton::Instance();
+#if 0
+        std::future<void> cacheFuture;
+        if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache()) {
+            if (0) {
+                cacheFuture = std::async(std::launch::async, 
+                        &WriteSubmission::_UpdateCache, this, startRba);
+            } else {
+                cacheFuture = pool.Enqueue(&WriteSubmission::_UpdateCache, this, startRba);
+            }
+        }
+#else
+        if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache()) {
+            _UpdateCache(startRba);
+            //_InvalidateCache(startRba);
+        }
+#endif 
         bool done = _ProcessOwnedWrite();
+#if 0 
+        if (read_cache->IsEnabled() && read_cache->IsEnabledCheckCache()) {
+            cacheFuture.get();
+        }
+#endif
         if (unlikely(!done))
         {
             rbaStateManager->BulkReleaseOwnership(volumeId, startRba,

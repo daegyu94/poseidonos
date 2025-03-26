@@ -168,6 +168,9 @@ LDFLAGS += `pkg-config --libs protobuf grpc++`\
 
 LDFLAGS += -lssl -lcrypto
 
+# for lfstack
+LDFLAGS += -latomic
+
 
 # for callstack symbols
 LDEXTRAFLAGS = -rdynamic

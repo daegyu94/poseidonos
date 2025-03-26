@@ -39,6 +39,7 @@
 #include "src/include/pos_event_id.hpp"
 #include "src/lib/block_alignment.h"
 #include "src/logger/logger.h"
+#include "src/read_cache/read_cache.h"
 
 namespace pos
 {
@@ -56,6 +57,60 @@ ReadCompletion::ReadCompletion(VolumeIoSmartPtr input, AllocatorService* allocat
 
 ReadCompletion::~ReadCompletion()
 {
+}
+
+void ReadCompletion::_AdmitCache() {
+    auto read_cache = ReadCacheSingleton::Instance();
+
+    if (read_cache->IsEnabled() == false || read_cache->IsPrefetchAdmission()) {
+        return;
+    }
+
+    uint64_t byteRba = ChangeSectorToByte(volumeIo->GetSectorRba());
+    BlockAlignment blockAlignment(byteRba, volumeIo->GetSize());
+    uint32_t blockCount = blockAlignment.GetBlockCount();
+    int array_id = volumeIo->GetArrayId();
+    uint32_t volume_id = volumeIo->GetVolumeId();
+    BlkAddr start_blk_addr = blockAlignment.GetHeadBlock();
+    BlkAddr blk_addr;
+    uintptr_t buffer_addr = (uintptr_t) volumeIo->GetBuffer();
+    int retry_cnt = 0;
+
+    for (uint32_t i = 0; i < blockCount; i++) {
+        uintptr_t addr = 0;
+        uint64_t src = buffer_addr + (4096 * i);
+        
+        blk_addr = start_blk_addr + i;
+
+        if (read_cache->Contain(array_id, volume_id, blk_addr)) {
+            //POS_TRACE_INFO(0, "Contained blk_addr: {}, i: {}, blockCount: {}, addr: {}, src: {}", 
+            //        blk_addr, i, blockCount, addr, src);
+            continue;
+        }
+
+        while (retry_cnt++ < 100) {
+            addr = read_cache->TryGetBuffer();
+            if (addr) {
+                break;
+            }
+            read_cache->Evict();
+        }
+        if (!addr) {
+            //POS_TRACE_INFO(0, "FailedAlloc blk_addr: {}, i: {}, blockCount: {}, addr: {}, src: {}", 
+            //        blk_addr, i, blockCount, addr, src);
+            continue;
+        }
+        
+        //POS_TRACE_INFO(0, "blk_addr: {}, i: {}, blockCount: {}, addr: {}, src: {}", 
+        //        blk_addr, i, blockCount, addr, src);
+
+        memcpy((void *) addr, (void *) src, 4096);
+        
+        read_cache->Put(array_id, volume_id, blk_addr, addr);
+        
+        read_cache->ClearInProgress(array_id, volume_id, blk_addr, 
+                kPrefetchInProgress);
+    }
 }
 
 bool
@@ -96,6 +151,9 @@ ReadCompletion::_DoSpecificJob(void)
     catch (...)
     {
     }
+
+    _AdmitCache();
+
     volumeIo = nullptr;
     airlog("CompleteUserRead", "user", GetEventType(), 1);
 

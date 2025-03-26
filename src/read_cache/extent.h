@@ -25,6 +25,8 @@ static inline uint64_t rba_start(uint64_t rba) {
     return rba - (rba % extent_size);
 }
 
+#define DELAYED_UPDATE 
+
 struct Extent {
     KeyType key;
     
@@ -35,6 +37,9 @@ struct Extent {
 
     std::atomic<int> prefetch_in_progress;
     std::atomic<bool> memcpy_in_progress;
+#ifdef DELAYED_UPDATE
+    std::atomic<bool> need_inv;
+#endif
     
     BitMap *bitmap;
     uint64_t timestamp;
@@ -47,6 +52,9 @@ struct Extent {
         memcpy_in_progress{false} {
             INIT_LIST_HEAD(&list);
             bitmap = new BitMap(blocks_per_extent);
+#ifdef DELAYED_UPDATE
+            need_inv = false;
+#endif
         }
 
     ~Extent() {
